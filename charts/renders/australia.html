@@ -1,0 +1,956 @@
+
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://cdn.pydata.org/bokeh/release/bokeh-gl-0.12.16.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/jquery-2.1.4.min.js" type="text/javascript"></script>
+<script src="https://code.jquery.com/ui/1.10.4/jquery-ui.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.1.20/require.min.js" type="text/javascript"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/underscore.js/1.8.3/underscore-min.js" type="text/javascript"></script>
+<script type="text/javascript">function HoloViewsWidget() {
+}
+
+HoloViewsWidget.prototype.init_slider = function(init_val){
+  if(this.load_json) {
+    this.from_json()
+  } else {
+    this.update_cache();
+  }
+}
+
+HoloViewsWidget.prototype.populate_cache = function(idx){
+  this.cache[idx].innerHTML = this.frames[idx];
+  if (this.embed) {
+    delete this.frames[idx];
+  }
+}
+
+HoloViewsWidget.prototype.process_error = function(msg){
+}
+
+HoloViewsWidget.prototype.from_json = function() {
+  var data_url = this.json_path + this.id + '.json';
+  $.getJSON(data_url, $.proxy(function(json_data) {
+    this.frames = json_data;
+    this.update_cache();
+    this.update(0);
+  }, this));
+}
+
+HoloViewsWidget.prototype.dynamic_update = function(current){
+  if (current === undefined) {
+    return
+  }
+  this.current = current;
+  if (this.comm) {
+    var msg = {comm_id: this.id+'_client', content: current}
+    this.comm.send(msg);
+  }
+}
+
+HoloViewsWidget.prototype.update_cache = function(force){
+  var frame_len = Object.keys(this.frames).length;
+  for (var i=0; i<frame_len; i++) {
+    if(!this.load_json || this.dynamic)  {
+      var frame = Object.keys(this.frames)[i];
+    } else {
+      var frame = i;
+    }
+    if(!(frame in this.cache) || force) {
+      if ((frame in this.cache) && force) { this.cache[frame].remove() }
+      var div = document.createElement("div");
+      var parent = document.getElementById("_anim_img"+this.id);
+      div.style.display = "none";
+      parent.appendChild(div)
+      this.cache[frame] = div;
+      var cache_id = "_anim_img"+this.id+"_"+frame;
+      this.populate_cache(frame);
+    }
+  }
+}
+
+HoloViewsWidget.prototype.update = function(current){
+  if(current in this.cache) {
+    for (var index in this.cache) {
+      this.cache[index].style.display = "none";
+    }
+    this.cache[current].style.display = "";
+    this.wait = false;
+  }
+}
+
+HoloViewsWidget.prototype.init_comms = function() {
+  var that = this
+  HoloViews.comm_manager.register_target(this.plot_id, this.id, function (msg) { that.process_msg(msg) })
+  if (!this.cached || this.dynamic) {
+    function ack_callback(msg) {
+      msg = JSON.parse(msg.content.data);
+      var comm_id = msg["comm_id"]
+      var comm_status = HoloViews.comm_status[comm_id];
+      if (that.queue.length > 0) {
+        that.time = Date.now();
+        that.dynamic_update(that.queue[that.queue.length-1]);
+        that.queue = [];
+      } else {
+        that.wait = false;
+      }
+      if ((msg.msg_type == "Ready") && msg.content) {
+        console.log("Python callback returned following output:", msg.content);
+      } else if (msg.msg_type == "Error") {
+        console.log("Python failed with the following traceback:", msg['traceback'])
+      }
+    }
+    var comm = HoloViews.comm_manager.get_client_comm(this.plot_id, this.id+'_client', ack_callback);
+    return comm
+  }
+}
+
+HoloViewsWidget.prototype.process_msg = function(msg) {
+}
+
+function SelectionWidget(frames, id, slider_ids, keyMap, dim_vals, notFound, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.frames = frames;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.slider_ids = slider_ids;
+  this.keyMap = keyMap
+  this.current_frame = 0;
+  this.current_vals = dim_vals;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.notFound = notFound;
+  this.cached = cached;
+  this.dynamic = dynamic;
+  this.cache = {};
+  this.json_path = json_path;
+  this.init_slider(this.current_vals[0]);
+  this.queue = [];
+  this.wait = false;
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms();
+  }
+}
+
+SelectionWidget.prototype = new HoloViewsWidget;
+
+
+SelectionWidget.prototype.get_key = function(current_vals) {
+  var key = "(";
+  for (var i=0; i<this.slider_ids.length; i++)
+  {
+    var val = this.current_vals[i];
+    if (!(typeof val === 'string')) {
+      if (val % 1 === 0) { val = val.toFixed(1); }
+      else { val = val.toFixed(10); val = val.slice(0, val.length-1);}
+    }
+    key += "'" + val + "'";
+    if(i != this.slider_ids.length-1) { key += ', ';}
+    else if(this.slider_ids.length == 1) { key += ',';}
+  }
+  key += ")";
+  return this.keyMap[key];
+}
+
+SelectionWidget.prototype.set_frame = function(dim_val, dim_idx){
+  this.current_vals[dim_idx] = dim_val;
+  var key = this.current_vals;
+  if (!this.dynamic) {
+    key = this.get_key(key)
+  }
+  if (this.dynamic || !this.cached) {
+    if ((this.time !== undefined) && ((this.wait) && ((this.time + 10000) > Date.now()))) {
+      this.queue.push(key);
+      return
+    }
+    this.queue = [];
+    this.time = Date.now();
+    this.current_frame = key;
+    this.wait = true;
+    this.dynamic_update(key)
+  } else if (key !== undefined) {
+    this.update(key)
+  }
+}
+
+
+/* Define the ScrubberWidget class */
+function ScrubberWidget(frames, num_frames, id, interval, load_json, mode, cached, json_path, dynamic, plot_id){
+  this.slider_id = "_anim_slider" + id;
+  this.loop_select_id = "_anim_loop_select" + id;
+  this.id = id;
+  this.plot_id = plot_id;
+  this.interval = interval;
+  this.current_frame = 0;
+  this.direction = 0;
+  this.dynamic = dynamic;
+  this.timer = null;
+  this.load_json = load_json;
+  this.mode = mode;
+  this.cached = cached;
+  this.frames = frames;
+  this.cache = {};
+  this.length = num_frames;
+  this.json_path = json_path;
+  document.getElementById(this.slider_id).max = this.length - 1;
+  this.init_slider(0);
+  this.wait = false;
+  this.queue = [];
+  if (!this.cached || this.dynamic) {
+    this.comm = this.init_comms()
+  }
+}
+
+ScrubberWidget.prototype = new HoloViewsWidget;
+
+ScrubberWidget.prototype.set_frame = function(frame){
+  this.current_frame = frame;
+  var widget = document.getElementById(this.slider_id);
+  if (widget === null) {
+    this.pause_animation();
+    return
+  }
+  widget.value = this.current_frame;
+  if(this.cached) {
+    this.update(frame)
+  } else {
+    this.dynamic_update(frame)
+  }
+}
+
+
+ScrubberWidget.prototype.get_loop_state = function(){
+  var button_group = document[this.loop_select_id].state;
+  for (var i = 0; i < button_group.length; i++) {
+    var button = button_group[i];
+    if (button.checked) {
+      return button.value;
+    }
+  }
+  return undefined;
+}
+
+
+ScrubberWidget.prototype.next_frame = function() {
+  this.set_frame(Math.min(this.length - 1, this.current_frame + 1));
+}
+
+ScrubberWidget.prototype.previous_frame = function() {
+  this.set_frame(Math.max(0, this.current_frame - 1));
+}
+
+ScrubberWidget.prototype.first_frame = function() {
+  this.set_frame(0);
+}
+
+ScrubberWidget.prototype.last_frame = function() {
+  this.set_frame(this.length - 1);
+}
+
+ScrubberWidget.prototype.slower = function() {
+  this.interval /= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.faster = function() {
+  this.interval *= 0.7;
+  if(this.direction > 0){this.play_animation();}
+  else if(this.direction < 0){this.reverse_animation();}
+}
+
+ScrubberWidget.prototype.anim_step_forward = function() {
+  if(this.current_frame < this.length - 1){
+    this.next_frame();
+  }else{
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.first_frame();
+    }else if(loop_state == "reflect"){
+      this.last_frame();
+      this.reverse_animation();
+    }else{
+      this.pause_animation();
+      this.last_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.anim_step_reverse = function() {
+  if(this.current_frame > 0){
+    this.previous_frame();
+  } else {
+    var loop_state = this.get_loop_state();
+    if(loop_state == "loop"){
+      this.last_frame();
+    }else if(loop_state == "reflect"){
+      this.first_frame();
+      this.play_animation();
+    }else{
+      this.pause_animation();
+      this.first_frame();
+    }
+  }
+}
+
+ScrubberWidget.prototype.pause_animation = function() {
+  this.direction = 0;
+  if (this.timer){
+    clearInterval(this.timer);
+    this.timer = null;
+  }
+}
+
+ScrubberWidget.prototype.play_animation = function() {
+  this.pause_animation();
+  this.direction = 1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_forward();}, this.interval);
+}
+
+ScrubberWidget.prototype.reverse_animation = function() {
+  this.pause_animation();
+  this.direction = -1;
+  var t = this;
+  if (!this.timer) this.timer = setInterval(function(){t.anim_step_reverse();}, this.interval);
+}
+
+function extend(destination, source) {
+  for (var k in source) {
+    if (source.hasOwnProperty(k)) {
+      destination[k] = source[k];
+    }
+  }
+  return destination;
+}
+
+function update_widget(widget, values) {
+  if (widget.hasClass("ui-slider")) {
+    widget.slider('option', {
+      min: 0,
+      max: values.length-1,
+      dim_vals: values,
+      value: 0,
+      dim_labels: values
+    })
+    widget.slider('option', 'slide').call(widget, event, {value: 0})
+  } else {
+    widget.empty();
+    for (var i=0; i<values.length; i++){
+      widget.append($("<option>", {
+        value: i,
+        text: values[i]
+      }))
+    };
+    widget.data('values', values);
+    widget.data('value', 0);
+    widget.trigger("change");
+  };
+}
+
+function init_slider(id, plot_id, dim, values, next_vals, labels, dynamic, step, value, next_dim,
+                     dim_idx, delay, jQueryUI_CDN, UNDERSCORE_CDN) {
+  // Slider JS Block START
+  function loadcssfile(filename){
+    var fileref=document.createElement("link")
+    fileref.setAttribute("rel", "stylesheet")
+    fileref.setAttribute("type", "text/css")
+    fileref.setAttribute("href", filename)
+    document.getElementsByTagName("head")[0].appendChild(fileref)
+  }
+  loadcssfile("https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css");
+  /* Check if jQuery and jQueryUI have been loaded
+     otherwise load with require.js */
+  var jQuery = window.jQuery,
+    // check for old versions of jQuery
+    oldjQuery = jQuery && !!jQuery.fn.jquery.match(/^1\.[0-4](\.|$)/),
+    jquery_path = '',
+    paths = {},
+    noConflict;
+  var jQueryUI = jQuery.ui;
+  // check for jQuery
+  if (!jQuery || oldjQuery) {
+    // load if it's not available or doesn't meet min standards
+    paths.jQuery = jQuery;
+    noConflict = !!oldjQuery;
+  } else {
+    // register the current jQuery
+    define('jquery', [], function() { return jQuery; });
+  }
+  if (!jQueryUI) {
+    paths.jQueryUI = jQueryUI_CDN.slice(null, -3);
+  } else {
+    define('jQueryUI', [], function() { return jQuery.ui; });
+  }
+  paths.underscore = UNDERSCORE_CDN.slice(null, -3);
+  var jquery_require = {
+    paths: paths,
+    shim: {
+      "jQueryUI": {
+        exports:"$",
+        deps: ['jquery']
+      },
+      "underscore": {
+        exports: '_'
+      }
+    }
+  }
+  require.config(jquery_require);
+  require(["jQueryUI", "underscore"], function(jUI, _){
+    if (noConflict) $.noConflict(true);
+    var vals = values;
+    if (dynamic && vals.constructor === Array) {
+      var default_value = parseFloat(value);
+      var min = parseFloat(vals[0]);
+      var max = parseFloat(vals[vals.length-1]);
+      var wstep = step;
+      var wlabels = [default_value];
+      var init_label = default_value;
+    } else {
+      var min = 0;
+      if (dynamic) {
+        var max = Object.keys(vals).length - 1;
+        var init_label = labels[value];
+        var default_value = values[value];
+      } else {
+        var max = vals.length - 1;
+        var init_label = labels[value];
+        var default_value = value;
+      }
+      var wstep = 1;
+      var wlabels = labels;
+    }
+    function adjustFontSize(text) {
+      var width_ratio = (text.parent().width()/8)/text.val().length;
+      var size = Math.min(0.9, Math.max(0.6, width_ratio))+'em';
+      text.css('font-size', size);
+    }
+    var slider = $('#_anim_widget'+id+'_'+dim);
+    slider.slider({
+      animate: "fast",
+      min: min,
+      max: max,
+      step: wstep,
+      value: default_value,
+      dim_vals: vals,
+      dim_labels: wlabels,
+      next_vals: next_vals,
+      slide: function(event, ui) {
+        var vals = slider.slider("option", "dim_vals");
+        var next_vals = slider.slider("option", "next_vals");
+        var dlabels = slider.slider("option", "dim_labels");
+        if (dynamic) {
+          var dim_val = ui.value;
+          if (vals.constructor === Array) {
+            var label = ui.value;
+          } else {
+            var label = dlabels[ui.value];
+          }
+        } else {
+          var dim_val = vals[ui.value];
+          var label = dlabels[ui.value];
+        }
+        var text = $('#textInput'+id+'_'+dim);
+        text.val(label);
+        adjustFontSize(text);
+        HoloViews.index[plot_id].set_frame(dim_val, dim_idx);
+        if (Object.keys(next_vals).length > 0) {
+          var new_vals = next_vals[dim_val];
+          var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+          update_widget(next_widget, new_vals);
+        }
+      }
+    });
+    slider.keypress(function(event) {
+      if (event.which == 80 || event.which == 112) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "max");
+        for (var i=start; i<=stop; i++) {
+          var delay = i*delay;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+      if (event.which == 82 || event.which == 114) {
+        var start = slider.slider("option", "value");
+        var stop =  slider.slider("option", "min");
+        var count = 0;
+        for (var i=start; i>=stop; i--) {
+          var delay = count*delay;
+          count = count + 1;
+          $.proxy(function doSetTimeout(i) { setTimeout($.proxy(function() {
+            var val = {value:i};
+            slider.slider('value',i);
+            slider.slider("option", "slide")(null, val);
+          }, slider), delay);}, slider)(i);
+        }
+      }
+    });
+    var textInput = $('#textInput'+id+'_'+dim)
+    textInput.val(init_label);
+    adjustFontSize(textInput);
+  });
+}
+
+function init_dropdown(id, plot_id, dim, vals, value, next_vals, labels, next_dim, dim_idx, dynamic) {
+  var widget = $("#_anim_widget"+id+'_'+dim);
+  widget.data('values', vals)
+  for (var i=0; i<vals.length; i++){
+    if (dynamic) {
+      var val = vals[i];
+    } else {
+      var val = i;
+    }
+    widget.append($("<option>", {
+      value: val,
+      text: labels[i]
+    }));
+  };
+  widget.data("next_vals", next_vals);
+  widget.val(value);
+  widget.on('change', function(event, ui) {
+    if (dynamic) {
+      var dim_val = parseInt(this.value);
+    } else {
+      var dim_val = $.data(this, 'values')[this.value];
+    }
+    var next_vals = $.data(this, "next_vals");
+    if (Object.keys(next_vals).length > 0) {
+      var new_vals = next_vals[dim_val];
+      var next_widget = $('#_anim_widget'+id+'_'+next_dim);
+      update_widget(next_widget, new_vals);
+    }
+    var widgets = HoloViews.index[plot_id]
+    if (widgets) {
+      widgets.set_frame(dim_val, dim_idx);
+    }
+  });
+}
+
+if (window.HoloViews === undefined) {
+  window.HoloViews = {}
+}
+
+var _namespace = {
+  init_slider: init_slider,
+  init_dropdown: init_dropdown,
+  comms: {},
+  comm_status: {},
+  index: {},
+  plot_index: {},
+  kernels: {},
+  receivers: {}
+}
+
+for (var k in _namespace) {
+  if (!(k in window.HoloViews)) {
+    window.HoloViews[k] = _namespace[k];
+  }
+}
+
+var JS_MIME_TYPE = 'application/javascript';
+var HTML_MIME_TYPE = 'text/html';
+var EXEC_MIME_TYPE = 'application/vnd.holoviews_exec.v0+json';
+var CLASS_NAME = 'output';
+
+/**
+ * Render data to the DOM node
+ */
+function render(props, node) {
+  var div = document.createElement("div");
+  var script = document.createElement("script");
+  node.appendChild(div);
+  node.appendChild(script);
+}
+
+/**
+ * Handle when a new output is added
+ */
+function handle_add_output(event, handle) {
+  var output_area = handle.output_area;
+  var output = handle.output;
+  if (!output.data.hasOwnProperty(EXEC_MIME_TYPE)) {
+    return
+  }
+  var id = output.metadata[EXEC_MIME_TYPE]["id"];
+  var toinsert = output_area.element.find("." + CLASS_NAME.split(' ')[0]);
+  if (id !== undefined) {
+    toinsert[0].children[0].innerHTML = output.data[HTML_MIME_TYPE];
+    toinsert[0].children[1].textContent = output.data[JS_MIME_TYPE];
+    output_area._hv_plot_id = id;
+    if ((window.Bokeh !== undefined) && (id in Bokeh.index)) {
+      HoloViews.plot_index[id] = Bokeh.index[id];
+    } else {
+      HoloViews.plot_index[id] = null;
+    }
+  }
+}
+
+/**
+ * Handle when an output is cleared or removed
+ */
+function handle_clear_output(event, handle) {
+  var id = handle.cell.output_area._hv_plot_id;
+  if ((id === undefined) || !(id in HoloViews.plot_index)) { return; }
+  var comm = window.HoloViews.comm_manager.get_client_comm("hv-extension-comm", "hv-extension-comm", function () {});
+  if (comm !== null) {
+    comm.send({event_type: 'delete', 'id': id});
+  }
+  delete HoloViews.plot_index[id];
+  if ((window.Bokeh !== undefined) & (id in window.Bokeh.index)) {
+    window.Bokeh.index[id].model.document.clear();
+    delete Bokeh.index[id];
+  }
+}
+
+/**
+ * Handle kernel restart event
+ */
+function handle_kernel_cleanup(event, handle) {
+  delete HoloViews.comms["hv-extension-comm"];
+  window.HoloViews.plot_index = {}
+}
+
+/**
+ * Handle update_display_data messages
+ */
+function handle_update_output(event, handle) {
+  handle_clear_output(event, {cell: {output_area: handle.output_area}})
+  handle_add_output(event, handle)
+}
+
+function register_renderer(events, OutputArea) {
+  function append_mime(data, metadata, element) {
+    // create a DOM node to render to
+    var toinsert = this.create_output_subarea(
+    metadata,
+    CLASS_NAME,
+    EXEC_MIME_TYPE
+    );
+    this.keyboard_manager.register_events(toinsert);
+    // Render to node
+    var props = {data: data, metadata: metadata[EXEC_MIME_TYPE]};
+    render(props, toinsert[0]);
+    element.append(toinsert);
+    return toinsert
+  }
+
+  events.on('output_added.OutputArea', handle_add_output);	
+  events.on('output_updated.OutputArea', handle_update_output);
+  events.on('clear_output.CodeCell', handle_clear_output);
+  events.on('delete.Cell', handle_clear_output);
+  events.on('kernel_ready.Kernel', handle_kernel_cleanup);
+
+  OutputArea.prototype.register_mime_type(EXEC_MIME_TYPE, append_mime, {
+    safe: true,
+    index: 0
+  });
+}
+
+if (window.Jupyter !== undefined) {
+  try {
+    var events = require('base/js/events');
+    var OutputArea = require('notebook/js/outputarea').OutputArea;
+    if (OutputArea.prototype.mime_types().indexOf(EXEC_MIME_TYPE) == -1) {
+      register_renderer(events, OutputArea);
+    }
+  } catch(err) {
+  }
+}
+
+// Define Bokeh specific subclasses
+function BokehSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function BokehScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+BokehSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+BokehScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var BokehMethods = {
+  update_cache : function(){
+    for (var index in this.frames) {
+      this.frames[index] = JSON.parse(this.frames[index]);
+    }
+  },
+  update : function(current){
+    if (current === undefined) {
+      return;
+    }
+    var data = this.frames[current];
+    if (data !== undefined) {
+      if (data.root in HoloViews.plot_index) {
+        var doc = HoloViews.plot_index[data.root].model.document;
+      } else {
+        var doc = Bokeh.index[data.root].model.document;
+      }
+      doc.apply_json_patch(data.content);
+    }
+  },
+  init_comms: function() {
+    if (Bokeh.protocol !== undefined) {
+      this.receiver = new Bokeh.protocol.Receiver()
+    } else {
+      this.receiver = null;
+    }
+    return HoloViewsWidget.prototype.init_comms.call(this);
+  },
+  process_msg : function(msg) {
+    if (this.plot_id in HoloViews.plot_index) {
+      var doc = HoloViews.plot_index[this.plot_id].model.document;
+    } else {
+      var doc = Bokeh.index[this.plot_id].model.document;
+    }
+    if (this.receiver === null) { return }
+    var receiver = this.receiver;
+    if (msg.buffers.length > 0) {
+      receiver.consume(msg.buffers[0].buffer)
+    } else {
+      receiver.consume(msg.content.data)
+    }
+    const comm_msg = receiver.message;
+    if ((comm_msg != null) && (doc != null)) {
+      doc.apply_json_patch(comm_msg.content, comm_msg.buffers)
+    }
+  }
+}
+
+// Extend Bokeh widgets with backend specific methods
+extend(BokehSelectionWidget.prototype, BokehMethods);
+extend(BokehScrubberWidget.prototype, BokehMethods);
+
+window.HoloViews.BokehSelectionWidget = BokehSelectionWidget
+window.HoloViews.BokehScrubberWidget = BokehScrubberWidget
+
+// Define MPL specific subclasses
+function MPLSelectionWidget() {
+  SelectionWidget.apply(this, arguments);
+}
+
+function MPLScrubberWidget() {
+  ScrubberWidget.apply(this, arguments);
+}
+
+// Let them inherit from the baseclasses
+MPLSelectionWidget.prototype = Object.create(SelectionWidget.prototype);
+MPLScrubberWidget.prototype = Object.create(ScrubberWidget.prototype);
+
+// Define methods to override on widgets
+var MPLMethods = {
+  init_slider : function(init_val){
+    if(this.load_json) {
+      this.from_json()
+    } else {
+      this.update_cache();
+    }
+    if (this.dynamic | !this.cached | (this.current_vals === undefined)) {
+      this.update(0)
+    } else {
+      this.set_frame(this.current_vals[0], 0)
+    }
+  },
+  process_msg : function(msg) {
+    var data = msg.content.data;
+    this.frames[this.current] = data;
+    this.update_cache(true);
+    this.update(this.current);
+  }
+}
+// Extend MPL widgets with backend specific methods
+extend(MPLSelectionWidget.prototype, MPLMethods);
+extend(MPLScrubberWidget.prototype, MPLMethods);
+
+window.HoloViews.MPLSelectionWidget = MPLSelectionWidget
+window.HoloViews.MPLScrubberWidget = MPLScrubberWidget
+</script>
+<script type="text/javascript">
+    function JupyterCommManager() {
+    }
+
+    JupyterCommManager.prototype.register_target = function(plot_id, comm_id, msg_handler) {
+      if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        comm_manager.register_target(comm_id, function(comm) {
+          comm.on_msg(msg_handler);
+        });
+      } else if ((plot_id in HoloViews.kernels) && (HoloViews.kernels[plot_id])) {
+        HoloViews.kernels[plot_id].registerCommTarget(comm_id, function(comm) {
+          comm.onMsg = msg_handler;
+        });
+      }
+    }
+
+    JupyterCommManager.prototype.get_client_comm = function(plot_id, comm_id, msg_handler) {
+      if (comm_id in window.HoloViews.comms) {
+        return HoloViews.comms[comm_id];
+      } else if (window.comm_manager || ((window.Jupyter !== undefined) && (Jupyter.notebook.kernel != null))) {
+        var comm_manager = window.comm_manager || Jupyter.notebook.kernel.comm_manager;
+        var comm = comm_manager.new_comm(comm_id, {}, {}, {}, comm_id);
+        if (msg_handler) {
+          comm.on_msg(msg_handler);
+        }
+      } else if ((plot_id in HoloViews.kernels) && (HoloViews.kernels[plot_id])) {
+        var comm = HoloViews.kernels[plot_id].connectToComm(comm_id);
+        comm.open();
+        if (msg_handler) {
+          comm.onMsg = msg_handler;
+        }
+      }
+      HoloViews.comms[comm_id] = comm;
+      return comm;
+    }
+
+    window.HoloViews.comm_manager = new JupyterCommManager();
+    </script>
+
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-0.12.16.min.css">
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-widgets-0.12.16.min.css">
+<link rel="stylesheet" href="https://cdn.pydata.org/bokeh/release/bokeh-tables-0.12.16.min.css">
+<link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css">
+<link rel="stylesheet" href="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css">
+<style>div.bk-hbox {
+    display: flex;
+    justify-content: center;
+}
+
+div.bk-hbox div.bk-plot {
+    padding: 8px;
+}
+
+div.bk-hbox div.bk-data-table {
+    padding: 20px;
+}
+
+div.hololayout {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+div.holoframe {
+  width: 75%;
+}
+
+div.holowell {
+  display: flex;
+  align-items: center;
+}
+
+form.holoform {
+  background-color: #fafafa;
+  border-radius: 5px;
+  overflow: hidden;
+  padding-left: 0.8em;
+  padding-right: 0.8em;
+  padding-top: 0.4em;
+  padding-bottom: 0.4em;
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.05);
+  margin-bottom: 20px;
+  border: 1px solid #e3e3e3;
+}
+
+div.holowidgets {
+  padding-right: 0;
+  width: 25%;
+}
+
+div.holoslider {
+  min-height: 0 !important;
+  height: 0.8em;
+  width: 100%;
+}
+
+div.holoformgroup {
+  padding-top: 0.5em;
+  margin-bottom: 0.5em;
+}
+
+div.hologroup {
+  padding-left: 0;
+  padding-right: 0.8em;
+  width: 100%;
+}
+
+.holoselect {
+  width: 92%;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.holotext {
+  padding-left:  0.5em;
+  padding-right: 0;
+  width: 100%;
+}
+
+.holowidgets .ui-resizable-se {
+  visibility: hidden
+}
+
+.holoframe > .ui-resizable-se {
+  visibility: hidden
+}
+
+.holowidgets .ui-resizable-s {
+  visibility: hidden
+}
+
+
+/* CSS rules for noUISlider based slider used by JupyterLab extension  */
+
+.noUi-handle {
+  width: 20px !important;
+  height: 20px !important;
+  left: -5px !important;
+  top: -5px !important;
+}
+
+.noUi-handle:before, .noUi-handle:after {
+  visibility: hidden;
+  height: 0px;
+}
+
+.noUi-target {
+  margin-left: 0.5em;
+  margin-right: 0.5em;
+}
+</style><div style='display: table; margin: 0 auto;'>
+
+<div class="bk-root">
+    <div class="bk-plotdiv" id="da17b8f2-35a8-4ef9-8fd1-eb1aa6c55c4d"></div>
+</div>
+<script type="text/javascript">
+  (function(root) {
+  function embed_document(root) {
+    
+  var docs_json = {"b860d26d-2f9f-4ae4-999e-202780c46496":{"roots":{"references":[{"attributes":{"plot":null,"text":"Financials","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"18af40e3-5647-451f-b7b0-3a0c32df0332","type":"Title"},{"attributes":{"child":{"id":"d6a9aa67-d303-4f22-b4c7-a79493c4a8f7","subtype":"Figure","type":"Plot"},"title":"Financials"},"id":"1f15197c-34bd-4c97-9260-ed063d56c939","type":"Panel"},{"attributes":{"plot":{"id":"eadecdcf-1e73-4186-b7de-efdf3e743a78","subtype":"Figure","type":"Plot"},"ticker":{"id":"f600cd00-f2fe-4d43-a42b-1e32e95f0946","type":"BasicTicker"}},"id":"0bc8551e-fbd1-4e0e-bf0c-061c4f5b0b6f","type":"Grid"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"Rating","transform":{"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"Rating","transform":{"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"326cfc85-6f53-462f-a13e-1137d27bb1ed","type":"Circle"},{"attributes":{},"id":"84e1f068-4cee-491a-b79e-fa18b232ef1c","type":"LinearScale"},{"attributes":{},"id":"68e5fc5f-d9e2-41f7-9b9e-0b5d4dad28e9","type":"LinearScale"},{"attributes":{"child":{"id":"65aa8109-eea1-4641-a269-701a8df9875c","subtype":"Figure","type":"Plot"},"title":"Real Estate"},"id":"227eeac0-7a07-4076-9bc8-dcee4e3d8a2f","type":"Panel"},{"attributes":{"source":{"id":"7edc7bb8-446f-4fc3-a57a-ed8ad05d08c0","type":"ColumnDataSource"}},"id":"368b5436-9eaa-438a-aeff-17787500a985","type":"CDSView"},{"attributes":{"axis_label":"YTW_predicted","bounds":"auto","formatter":{"id":"054268d1-4c78-438e-9ac6-e1ecfb33bbcc","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"c20f752c-5266-4624-a2f5-2f908779f770","subtype":"Figure","type":"Plot"},"ticker":{"id":"603e420c-259f-4439-8270-b8c87906d2d1","type":"BasicTicker"}},"id":"947ee73b-4953-4ca1-8be8-54ba2c4360e1","type":"LinearAxis"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"af17a0ff-95d2-4db5-a8a7-1f4ea319110e","type":"Circle"},{"attributes":{},"id":"316c2d84-49c2-4d74-9ebb-8fe4656f1d9d","type":"WheelZoomTool"},{"attributes":{"callback":null,"formatters":{"Maturity_Date":"datetime"},"renderers":[{"id":"a7ed77f9-95af-4d20-b07b-ab73b953e437","type":"GlyphRenderer"}],"tooltips":[["Issuer","@Issuer"],["Currency","@Currency"],["Coupon","@Coupon"],["Maturity","@Maturity_Date{%F}"],["Seniority","@Seniority"],["Rating","@Rating"],["Amt. Outstanding","@Amount_Outstanding m"],["Sector","@{Sector}"],["Country","@Country_of_Incorporation"],["LTM Leverage","@Net_Debt_EBITDA"],["NTM Leverage","@Net_Debt_EBITDA_Fwd_Parent"],["Total Debt/Capital %","@Total_Debt_Capital_Parent"],["Call Price","@Next_Call_Price"],["Call Date","@Next_Call_Date"],["Price","@Price"],["Current Yield","@Current_Yield"],["3m % change","@Price_Change_3m_pct"],["YTW","@YTW_true"],["YTW est.","@YTW_predicted"]]},"id":"387d2b15-76eb-4fb4-b0dd-8f5f6a867b3e","type":"HoverTool"},{"attributes":{"factors":["BBB"],"palette":["#fee695"]},"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"},{"attributes":{},"id":"a2fb753f-86d7-4702-8540-c02b033009d8","type":"WheelZoomTool"},{"attributes":{"child":{"id":"009b76b0-7665-4ef8-ad46-8cc0f653be03","subtype":"Figure","type":"Plot"},"title":"Australia"},"id":"9428ced0-e78b-43ce-8cbe-1d54b98c48fc","type":"Panel"},{"attributes":{"callback":null,"end":6.687,"start":0.131},"id":"dc6083f8-9a0c-4dfb-bbf7-19cd00a31fb5","type":"Range1d"},{"attributes":{"callback":null,"tabs":[{"id":"9428ced0-e78b-43ce-8cbe-1d54b98c48fc","type":"Panel"},{"id":"5a719421-4c96-4b00-95ad-6b6050012181","type":"Panel"},{"id":"1f15197c-34bd-4c97-9260-ed063d56c939","type":"Panel"},{"id":"73082ad3-456d-4623-980a-969dcb846d04","type":"Panel"},{"id":"a378be64-d7f1-41db-8de9-b0a11034d9d6","type":"Panel"},{"id":"227eeac0-7a07-4076-9bc8-dcee4e3d8a2f","type":"Panel"}]},"id":"8ef45f29-26be-45ca-96b5-45850552044a","type":"Tabs"},{"attributes":{"callback":null,"end":7.953606324245992,"start":-0.07918323343203326},"id":"48d91bc4-c32d-4932-85fd-a843b275d6f3","type":"Range1d"},{"attributes":{"plot":{"id":"009b76b0-7665-4ef8-ad46-8cc0f653be03","subtype":"Figure","type":"Plot"},"ticker":{"id":"e7407632-22b3-43f8-8f6a-f08a0d63ab48","type":"BasicTicker"}},"id":"004bae0d-82a7-4921-9371-c8d36bbb2c38","type":"Grid"},{"attributes":{},"id":"662d77f5-c23c-43a8-99e1-2645db09bc91","type":"LinearScale"},{"attributes":{"dimension":1,"plot":{"id":"d6a9aa67-d303-4f22-b4c7-a79493c4a8f7","subtype":"Figure","type":"Plot"},"ticker":{"id":"89d498e7-5fb2-418d-add5-8892cb7eff5d","type":"BasicTicker"}},"id":"10943efe-3863-4cfb-85a4-f21cd5ea5fea","type":"Grid"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"1e5052dd-5c2a-4fe1-9598-35fada50152c","type":"Circle"},{"attributes":{"dimension":1,"plot":{"id":"65aa8109-eea1-4641-a269-701a8df9875c","subtype":"Figure","type":"Plot"},"ticker":{"id":"d5867cbf-45b4-4841-9178-1f50de499b4b","type":"BasicTicker"}},"id":"e538f02d-16b7-44ed-bc7c-fc8b5d3c805f","type":"Grid"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"577393c7-7cb4-416e-9b43-4ba6748c0f33","type":"HoverTool"},{"id":"cd46449c-f9e6-4c24-9483-bc6af72c2eb6","type":"SaveTool"},{"id":"90f0fc35-fa8c-44f9-b09f-47a5eed37d6b","type":"PanTool"},{"id":"94a6ecb2-f758-4306-8da3-f8a1ff2a340c","type":"WheelZoomTool"},{"id":"99840b83-1fe4-4395-bced-66e9cd5f0753","type":"BoxZoomTool"},{"id":"95a2e857-b892-4ed3-97d8-2e00f3ede6c0","type":"ResetTool"}]},"id":"fd822287-7720-4f69-b851-4d5448af93c6","type":"Toolbar"},{"attributes":{"data_source":{"id":"e6e0b173-6daf-4dea-beb5-eb6241b673f8","type":"ColumnDataSource"},"glyph":{"id":"6ba7642c-36ae-442f-99de-1fd5470f6a1f","type":"Circle"},"hover_glyph":null,"muted_glyph":{"id":"95d4c2bb-6f08-449a-bc9b-7201c471e53c","type":"Circle"},"nonselection_glyph":{"id":"1e5052dd-5c2a-4fe1-9598-35fada50152c","type":"Circle"},"selection_glyph":null,"view":{"id":"6f096773-f20c-4094-a2ca-4c1e4d270389","type":"CDSView"}},"id":"226a2066-f5c5-4166-a67a-a89d34643450","type":"GlyphRenderer"},{"attributes":{"callback":null,"data":{"Amount_Outstanding":{"__ndarray__":"rkfhehQadEBxPQrXo0hlQAAAAAAArHlAw/UoXI9CPkDXo3A9Cg9vQAAAAAAAEIpAAAAAAAAAMECamZmZmSlpQOF6FK5HYVxAUrgeheuNgEDNzMzMzEh1QClcj8L1YGxAZmZmZma+fkBI4XoUrgN6QPYoXI/ChVlAKVyPwvVgbEAzMzMzM+tiQM3MzMzMSHVAMzMzMzPrYkCF61G4HkU+QK5H4XoUpmdAKVyPwvVgbEAzMzMzM+tiQOxRuB6F61JAcT0K16O8gUAzMzMzM7MmQDMzMzMzsyZASOF6FK5HHkBI4XoUrkceQOxRuB6F61JAMzMzMzPrYkDsUbgehQNqQDMzMzMz62JA4XoUrkdhXEAAAAAAAPiRQAAAAAAAwJJAAAAAAABwh0CPwvUoXOuCQOxRuB6FA2pAMzMzMzPrYkA9CtejcFFwQOxRuB6FA2pAcT0K16O8gUApXI/C9dR4QFK4HoXrjYBAj8L1KFzrckApXI/C9WB8QOF6FK5HYVxArkfhehSmZ0AK16NwPaZ3QHE9CtejSGVA7FG4HoXrUkCPwvUoXOtyQA==","dtype":"float64","shape":[53]},"Country_of_Incorporation":["Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia"],"Coupon":{"__ndarray__":"7FG4HoXrBkAAAAAAAAAOQH9qvHSTGNw/ObTIdr6f6j/NzMzMzMwTQM3MzMzMzBdAzczMzMzMF0DNzMzMzMwXQM3MzMzMzARAAAAAAAAADkBmZmZmZmYQQIXrUbgehQZAAAAAAAAADkAAAAAAAAAKQAAAAAAAABRAAAAAAAAAFkAAAAAAAAAYQAAAAAAAABVApHA9CtcjFkAAAAAAAAAVQAAAAAAAAA5AAAAAAAAADEAAAAAAAAAVQBSuR+F6FAZA7FG4HoXrBEDNzMzMzMwWQB+F61G4HhhAcT0K16NwF0CkcD0K16MKQAAAAAAAABZAAAAAAAAAFEAAAAAAAAAMQGZmZmZmZhRAZmZmZmZmFEDNzMzMzMwUQAAAAAAAAA5AAAAAAACAHEBmZmZmZmYIQK5H4XoUrgBAAAAAAAAACkDNzMzMzMwQQAAAAAAAAApApHA9CtejBEA9CtejcD0GQOF6FK5H4QVAAAAAAAAAEECamZmZmZkFQAAAAAAAABBAAAAAAAAACkCamZmZmZkHQAAAAAAAAAxA4XoUrkfhCUAAAAAAAAAKQA==","dtype":"float64","shape":[53]},"Currency":["Australian Dollar","Australian Dollar","Japanese Yen","Japanese Yen","US Dollar","US Dollar","US Dollar","US Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","US Dollar","US Dollar","US Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar"],"Current_Yield":{"__ndarray__":"JBCb3p+7BkA1rhZ6DnQNQBdiBk81+ts/khuV+T8S6j+X7sWsfTYTQMP1ZK71tRRAw/VkrvW1FEBMCfCparEWQF0wIs3O2ARA6n+yvUdlDUAiAaRn+l0QQOVIaLJqegZAS0WPIf/FDUDeGepkVAMKQOdpB4SrWxNAne2hP/M1FEDs5/4JmU8XQFJawjje8hNAMfVry15wFUAKgPTYF6UTQCwG2H11jQ1AVdfDghfPC0CFKTU+LoUUQLj5wT23IAZA/SgFxAfgBEBsujNWdbkUQCMeQqnGfhVAQrsZ+MoUFUACkdBrLIsKQBgg4dzkNhVAmyNQZTm2E0CJAtN/RqgLQL7TuAXNURRA9rFCch2MFECBLQcPPBgSQDzw4im5vw1AaLPIbHB+FkACagO6cwgIQLaWkt6OsABAzolCoPjACUBU1XFeimUQQJAumnzwPQpAq5BKVgWwBEBLDbtxaVIGQNau8bH3xQVAf+3PE5JtD0DwdoV+mLIFQPGNlXzdfw9A/T1cjXrfCUD5jDq4YaoHQBafh60gCwxA9X95dpXUCUBYZl9CiRsKQA==","dtype":"float64","shape":[53]},"Issuer":["BNP Paribas Australia and New Zealand","BNPP Fund Services Australasia Pty Ltd","BNPP SA (Australia branch)","BNPP SA (Australia branch)","Barrick (PD) Australia Finance Pty Ltd","Barrick (PD) Australia Finance Pty Ltd","Barrick (PD) Australia Finance Pty Ltd","CIMIC Finance (USA) Pty Ltd","Caterpillar Financial Australia Limited","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","GE Capital Australia Funding Pty Ltd","GE Capital Australia Funding Pty Ltd","GE Capital Australia Funding Pty Ltd","GE Capital Australia Funding Pty Ltd","Genworth Financial Mortgage Insurance Pty Ltd","HSBC Bank Australia Limited","Holcim Finance (Australia) Pty Ltd","Holcim Finance (Australia) Pty Ltd","Holcim Finance (Australia) Pty Ltd","Hongkong and Shanghai Banking Corporation Limited, Sydney Branch","Hongkong and Shanghai Banking Corporation Limited, Sydney Branch","ING Bank (Australia) Limited","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","John Deere Financial Limited","Liberty Financial Pty Ltd","Liberty Financial Pty Ltd","Rio Tinto Finance (USA) Limited","Rio Tinto Finance (USA) Limited","Rio Tinto Finance (USA) Limited","Royal Bank of Canada (Sydney Branch)","Royal Bank of Canada (Sydney Branch)","Royal Bank of Canada (Sydney Branch)","Royal Bank of Canada (Sydney Branch)","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited"],"Leverage":["-","-","-","-","0-2x","0-2x","0-2x","0-2x","2-4x","4-5x","4-5x","4-5x","4-5x","4-5x","8-10x","8-10x","8-10x","8-10x","0-2x","-","8-10x","8-10x","8-10x","-","-","-","-","-","-","-","-","6-8x","-","-","0-2x","0-2x","0-2x","-","-","-","-","-","-","-","-","-","-","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x"],"Maturity_Date":{"__ndarray__":"AABAeUgjd0IAAEB5SCN3QgAAAE3I03ZCAABAdtQfeUIAAAD/Z/p2QgAA4HACBoBCAADgcAIGgEIAAMCS5EZ4QgAAAHbkJHdCAADAeWM8d0IAAEBPu3x6QgAAwIsBMXhCAAAAF0oceUIAAMCLATF4QgAAwOCt1nZCAAAABawneEIAAIBf6pd2QgAAwJpmRXdCAAAAVNl8eUIAAIDxUzF4QgAAAG8BD3dCAABA9JwWeEIAAIBSWp52QgAAQOM0VHdCAACABmYpd0IAAECPvuB4QgAAgCKJynhCAACAQ4zTeEIAAAC1SKB2QgAAgEYA13ZCAACAcid1dkIAAADeZPF2QgAAgNjSJndCAACA2j6Ld0IAAODAzkOAQgAAgCwOd3lCAAAAt3nhekIAAMAEU3Z3QgAAQNh5dXZCAACAVMYCd0IAAIAHyu55QgAAAEjoa3hCAACAIvKAd0IAAABI6Gt4QgAAQPQFzXZCAABA9AXNdkIAAACrWj13QgAAwCK06HZCAADAY4TIdkIAAEAxlS13QgAAwLmUM3hCAADAuZQzeEIAAIBxiIx3Qg==","dtype":"float64","shape":[53]},"Net_Debt_EBITDA":["-","-","-","-","1.01x","1.01x","1.01x","0.52x","2.70x","4.92x","4.92x","4.92x","4.92x","4.92x","9.49x","9.49x","9.49x","9.49x","1.88x","-","9.65x","9.65x","9.65x","-","-","-","-","-","-","-","-","7.48x","-","-","0.22x","0.22x","0.22x","-","-","-","-","-","-","-","-","-","-","5.40x","5.40x","5.40x","5.40x","5.40x","5.40x"],"Net_Debt_EBITDA_Fwd_Parent":["-","-","-","-","1.06x","1.06x","1.06x","0.46x","2.60x","4.45x","4.45x","4.45x","4.45x","4.45x","3.39x","3.39x","3.39x","3.39x","-","-","2.39x","2.39x","2.39x","-","-","-","-","-","-","-","-","7.04x","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","4.03x","4.03x","4.03x","4.03x","4.03x","4.03x"],"Next_Call_Date":["-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","2020-07-03","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","2025-03-15","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-"],"Next_Call_Price":["-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","100.0","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","100.0","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-"],"Price":{"__ndarray__":"6SYxCKw0WUAQWDm0yHZZQEJg5dAiG1lASOF6FK6HWUDdJAaBlcNZQLTIdr6fulxAtMh2vp+6XEDVeOkmMThaQJqZmZmZ8VhA3SQGgZWDWUC+nxov3QxZQJZDi2znC1lAYhBYObQwWUDNzMzMzPxYQE5iEFg51FlAO99PjZc2W0B3vp8aL71ZQOF6FK5HUVpA4XoUrkfRWUC28/3UeLlaQDeJQWDlYFlAhxbZzvcrWUASg8DKoZVZQBkEVg4t8lhA9ihcj8INWUApXI/C9YBbQC/dJAaBDVxAarx0kxjMW0CsHFpkOxdZQKJFtvP97FlAIbByaJFdWUCe76fGS09ZQNNNYhBYGVlAJzEIrBzSWEC+nxov3bxcQLx0kxgENllAvp8aL92sX0B9PzVeumFZQD81XrpJ/FhAd76fGi89WUA9CtejcJ1ZQKJFtvP9xFhA4XoUrkfxWECNl24Sg+hYQI/C9ShcH1lAFK5H4Xp0WUAzMzMzM+NYQARWDi2yZVlAgZVDi2wfWUCDwMqhRe5YQK5H4XoU9lhAPzVeukkMWUASg8DKoeVYQA==","dtype":"float64","shape":[53]},"Price_Change_3m_pct":{"__ndarray__":"YhBYObTIxr9zaJHtfD/Vv/Cnxks3icE/5/up8dJNwj8fhetRuB71vylcj8L1KB3AKVyPwvUoHcCuR+F6FK4FwFpkO99Pjae/okW28/3UyL+oxks3iUHYv7x0kxgEVs6/y6FFtvP9tL+cxCCwcmjBv/LSTWIQWOW/xSCwcmiR5b91kxgEVg7tv7ByaJHtfOe/iUFg5dAiq79Ei2zn+6npv7gehetRuM6/+n5qvHSTuL9CYOXQItvlvwAAAAAAAPh/ObTIdr6fur+6SQwCK4e2v/p+arx0k+i/WDm0yHa+57/8qfHSTWLAv2iR7Xw/Neq/WmQ730+N5791kxgEVg7NvwIrhxbZzrc/AAAAAAAA+H8K16NwPQoRwFyPwvUoXAPAFK5H4XoUCMDsUbgehevRv5qZmZmZmZm/gZVDi2zny7/dJAaBlUPTvwAAAAAAAPh/AAAAAAAA+H8AAAAAAAD4fxfZzvdT48W/dZMYBFYO4b/FILByaJHVvyGwcmiR7dS/hxbZzvdTw7/Xo3A9CtfDv2q8dJMYBLY/iUFg5dAiuz8AAAAAAAD4fw==","dtype":"float64","shape":[53]},"Rating":["A","A","A","A","BBB","BBB","BBB","BBB","A","A-","A-","A-","A-","A-","A","A","A","A","A-","A+","BBB","BBB","BBB","-","AA-","A+","A+","A+","-","A+","A+","A","BBB-","BBB-","A","A","A","AA-","AA-","AA-","AA-","A+","A+","A+","A+","A+","A+","BBB+","BBB+","BBB+","BBB+","BBB+","BBB+"],"Sector":["Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials"],"Seniority":["Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Subordinate","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured"],"Total_Debt_Capital_Parent":["-","-","-","-","36.2%","36.2%","36.2%","60.9%","69.8%","59.4%","59.4%","59.4%","59.4%","59.4%","62.1%","62.1%","62.1%","62.1%","24.1%","-","37.5%","37.5%","37.5%","-","-","-","-","-","-","-","-","81.5%","-","-","22.9%","22.9%","22.9%","-","-","-","-","-","-","-","-","-","-","59.8%","59.8%","59.8%","59.8%","59.8%","59.8%"],"YTW_predicted":{"__ndarray__":"aHNERgLUBEDt89x6WUYJQABs+zVaRbS/UGCV1xDi2j+3ZVVv7moLQDhDBSePcRJAg2mD2D3vEkA2UiWUEaEQQGTzEtKy9QRAvBqJ9vbtBkCU/CX1Dk8LQL9+ZkHo6gVAjheGFKgpCUC/UYyJ6BcHQL4IRU9O0QpAnSDAS7R1DUCSacaEgZ0MQGp6JTPD3AtA9iMmSuuLDkBxqT8Ka9EKQM95bbZ4VglAjuCwu8oZCkBBkKeiq+4LQKqS+P1HVgpAdFLpxU1kBUDrcOJHw5EMQKdkFx7+jQ5AL9RHN1Y9DkCPLEPE3l8KQNPljoa3JQtAaeVi6QSaCUAG0D5GR2QHQDHSQDEz8Q1AnY8nQJJ1DkDLIzjpe7gRQAr4wvC06A1A9OumYqx3EUC4QGmbjlYFQO/LziCeFAJANESwu2+VBUDnNdMo8OcKQAEXhOL6PAlABEd3LbhVBkAnNKuD6+wHQFEacsYivwVAWLKGWjnDCEDElcgvtZMGQIVeDOArrgdARA1TUJPtBUBKCGHTDscFQEJHPRQIPQhAlPwzQKRmB0AqO/kRC+0GQA==","dtype":"float64","shape":[53]},"YTW_true":{"__ndarray__":"YhBYObTIBUDl0CLb+X4GQPhT46WbxMA/BFYOLbKd3z/4U+Olm8QIQB1aZDvfTxNAHVpkO99PE0B7FK5H4foSQBkEVg4tsgVAEFg5tMh2BkCYbhKDwEoQQIPAyqFFtgdAtvP91HjpDEB/arx0kxgKQNv5fmq8dARAf2q8dJMYCkCDwMqhRbYEQJ7vp8ZLNwdAuB6F61G4D0AzMzMzMzMMQFK4HoXrUQdAj8L1KFyPCkCkcD0K16MFQAIrhxbZzgZAdZMYBFYOBUDJdr6fGi8OQM3MzMzMzAxAqMZLN4lBDUA3iUFg5dAFQOkmMQisHAZApHA9CtejA0DufD81XroFQEoMAiuHlhNA9ihcj8J1FUDjpZvEILAQQIGVQ4ts5wxAL90kBoGVD0Bg5dAi2/kFQHNoke18PwNAJQaBlUOLBUDD9Shcj8IOQA4tsp3vpwtAL90kBoGVBkDJdr6fGi8IQDeJQWDl0ARAuB6F61G4BEA9CtejcD0HQFpkO99PjQdADAIrhxbZBkB56SYxCKwIQOf7qfHSTQxAJzEIrBxaCkCTGARWDi0LQA==","dtype":"float64","shape":[53]},"size_Amount_Outstanding":{"__ndarray__":"neKwt1ClI0Bs3ZCtoJYcQJhrbMKLMyZAQbRKCpEaCEBfVnEHdkQhQNNPABiroi9AcoT4dPGGAUAygLZRmxUfQFNvOVfPVxdAc3tDl302KUAGrZiRIDckQPUyWFJxgSBAutI1mLFLKEAYnmJsVVkmQBzl+ZH8IhZA9TJYUnGBIED1JngBC/QaQAatmJEgNyRA9SZ4AQv0GkCENbUIlhsIQJmSUZeIIh5A9TJYUnGBIED1JngBC/QaQPS1knY6DxNAh4EreAoZKkAgOU/DM4b9PyA5T8Mzhv0/caAW/Joc+D9xoBb8mhz4P/S1knY6DxNA9SZ4AQv0GkBxPbgqF5sfQPUmeAEL9BpAU285V89XF0BiYmos/ZIyQH7EIyxC+TJAAAAAAAAALkC4lN4uKPQqQHE9uCoXmx9A9SZ4AQv0GkAbgt2FVLMhQHE9uCoXmx9Ah4EreAoZKkAKutK5ydUlQHN7Q5d9NilABDL/1CUPI0DGOGymrVcnQFNvOVfPVxdAmZJRl4giHkDSOg8yEk8lQGzdkK2glhxA9LWSdjoPE0AEMv/UJQ8jQA==","dtype":"float64","shape":[53]}},"selected":{"id":"069681ad-f650-4f53-b61d-5490411cb538","type":"Selection"},"selection_policy":{"id":"9b6ea4f3-dd0b-442c-9b2a-4de7afee3ab8","type":"UnionRenderers"}},"id":"ebef5669-b83b-47b2-8d1a-e8b45e77cfe0","type":"ColumnDataSource"},{"attributes":{},"id":"c60c5a1e-c3d4-46b5-8457-7e7be3e9cee8","type":"BasicTickFormatter"},{"attributes":{},"id":"f30b1122-5a4b-4719-aefe-13cd17561e32","type":"SaveTool"},{"attributes":{"axis_label":"YTW_predicted","bounds":"auto","formatter":{"id":"10a3ef48-d7a5-4740-b048-911cfbd303b3","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"009b76b0-7665-4ef8-ad46-8cc0f653be03","subtype":"Figure","type":"Plot"},"ticker":{"id":"e7407632-22b3-43f8-8f6a-f08a0d63ab48","type":"BasicTicker"}},"id":"4a6cecce-345a-4773-b637-eb62b91440ee","type":"LinearAxis"},{"attributes":{},"id":"0e2a07c0-adaf-41c5-acd7-deec7beeb312","type":"WheelZoomTool"},{"attributes":{"data_source":{"id":"4951c8d7-cc79-4657-b6b7-f1dfd2f4ae0b","type":"ColumnDataSource"},"glyph":{"id":"38877759-f9d8-494e-8ed1-af30d7d3b49e","type":"Circle"},"hover_glyph":null,"muted_glyph":{"id":"0d4987f9-8b28-49cc-8e39-f8f7c889338f","type":"Circle"},"nonselection_glyph":{"id":"d706a4b8-c118-4c12-89be-b9218f1193c3","type":"Circle"},"selection_glyph":null,"view":{"id":"ad4ace74-7464-4a05-a130-142b05d60c65","type":"CDSView"}},"id":"a7ed77f9-95af-4d20-b07b-ab73b953e437","type":"GlyphRenderer"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"325a8cdc-f899-4765-8778-a2053a94929e","type":"Circle"},{"attributes":{"callback":null,"end":7.953606324245992,"start":-0.07918323343203326},"id":"e63166df-1137-45f9-9e83-285189fbcfca","type":"Range1d"},{"attributes":{},"id":"fd03f39f-62c2-4cd1-b804-76d89543e108","type":"BasicTickFormatter"},{"attributes":{"source":{"id":"fdf11ffb-82d7-45bb-a386-f01996dc598e","type":"ColumnDataSource"}},"id":"7f99fdb4-0786-49a2-bf19-0dace0110ac0","type":"CDSView"},{"attributes":{"data_source":{"id":"ebef5669-b83b-47b2-8d1a-e8b45e77cfe0","type":"ColumnDataSource"},"glyph":{"id":"9eaf4f58-31d1-41b4-b753-e8d3b8d57ee6","type":"Circle"},"hover_glyph":null,"muted_glyph":{"id":"f7c8d36b-4127-41b9-83f1-b03c514cbd26","type":"Circle"},"nonselection_glyph":{"id":"b193d3ab-deae-4925-94de-b466ed12dc84","type":"Circle"},"selection_glyph":null,"view":{"id":"fb5b5434-38f6-45ce-82b4-415c73d0ff7e","type":"CDSView"}},"id":"5362f364-a0f4-4e6d-bef5-93302b88445d","type":"GlyphRenderer"},{"attributes":{"below":[{"id":"aaf80df9-e7cc-4d25-892c-e7308be3843a","type":"LinearAxis"}],"left":[{"id":"135aad9b-3faa-4315-af3c-5a2b99dfcc03","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":1200,"renderers":[{"id":"aaf80df9-e7cc-4d25-892c-e7308be3843a","type":"LinearAxis"},{"id":"0bc8551e-fbd1-4e0e-bf0c-061c4f5b0b6f","type":"Grid"},{"id":"135aad9b-3faa-4315-af3c-5a2b99dfcc03","type":"LinearAxis"},{"id":"0dac5202-b0ab-448e-8937-eba5ded50059","type":"Grid"},{"id":"4acc1dbc-70d7-4c08-a080-fca98b20a86e","type":"BoxAnnotation"},{"id":"d453bfcd-39ae-4d72-930b-38e9b34d097c","type":"GlyphRenderer"}],"title":{"id":"3dbd7146-a8ca-4a78-a6fd-248f4561fcd2","type":"Title"},"toolbar":{"id":"fd822287-7720-4f69-b851-4d5448af93c6","type":"Toolbar"},"x_range":{"id":"eaf17734-16c0-4a49-a21c-4e779bfad9fe","type":"Range1d"},"x_scale":{"id":"84e1f068-4cee-491a-b79e-fa18b232ef1c","type":"LinearScale"},"y_range":{"id":"de471276-3829-4e8c-b5a6-1233e306b890","type":"Range1d"},"y_scale":{"id":"ed29ab34-eb18-4285-a10a-1282a128b25f","type":"LinearScale"}},"id":"eadecdcf-1e73-4186-b7de-efdf3e743a78","subtype":"Figure","type":"Plot"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"9eaf4f58-31d1-41b4-b753-e8d3b8d57ee6","type":"Circle"},{"attributes":{},"id":"d5867cbf-45b4-4841-9178-1f50de499b4b","type":"BasicTicker"},{"attributes":{"callback":null,"data":{"Amount_Outstanding":{"__ndarray__":"CtejcD2md0AAAAAAADiDQA==","dtype":"float64","shape":[2]},"Country_of_Incorporation":["Australia","Australia"],"Coupon":{"__ndarray__":"AAAAAAAAEkAAAAAAAAAaQA==","dtype":"float64","shape":[2]},"Currency":["Australian Dollar","US Dollar"],"Current_Yield":{"__ndarray__":"jbfFxFiqEUDvDIl5O0MaQA==","dtype":"float64","shape":[2]},"Issuer":["Glencore Australia Holdings Pty Limited","Tronox Limited (NYSE:TROX)"],"Leverage":["2-4x","5-6x"],"Maturity_Date":{"__ndarray__":"AACAGG3UdkIAAIAA59h5Qg==","dtype":"float64","shape":[2]},"Net_Debt_EBITDA":["2.68x","5.53x"],"Net_Debt_EBITDA_Fwd_Parent":["1.76x","3.56x"],"Next_Call_Date":["-","2021-04-15"],"Next_Call_Price":["-","103.25"],"Price":{"__ndarray__":"8KfGSzd5WUAAAAAAAMBYQA==","dtype":"float64","shape":[2]},"Price_Change_3m_pct":{"__ndarray__":"5dAi2/l+2r8AAAAAAAD4fw==","dtype":"float64","shape":[2]},"Rating":["BBB","B-"],"Sector":["Materials","Materials"],"Seniority":["Senior Unsecured","Senior Unsecured"],"Total_Debt_Capital_Parent":["40.7%","75.6%"],"YTW_predicted":{"__ndarray__":"F3ytKdevEEDLlB8tftAfQA==","dtype":"float64","shape":[2]},"YTW_true":{"__ndarray__":"46WbxCCwCED0/dR46aYaQA==","dtype":"float64","shape":[2]},"size_Amount_Outstanding":{"__ndarray__":"0joPMhJPJUA19EYpiSorQA==","dtype":"float64","shape":[2]}},"selected":{"id":"29f6968f-07d0-47ae-b6b7-8ca6a59a753e","type":"Selection"},"selection_policy":{"id":"27bbb269-53fe-4144-84d2-6195bfd81ae2","type":"UnionRenderers"}},"id":"e35c02fe-f1b9-475b-b8d3-ff65948dbb49","type":"ColumnDataSource"},{"attributes":{},"id":"8c4566ac-0aab-494c-9fa7-1ec278bf9749","type":"BasicTickFormatter"},{"attributes":{},"id":"5dfb0854-6a4b-455f-8790-5a1fa70f5e68","type":"LinearScale"},{"attributes":{"data_source":{"id":"e35c02fe-f1b9-475b-b8d3-ff65948dbb49","type":"ColumnDataSource"},"glyph":{"id":"325a8cdc-f899-4765-8778-a2053a94929e","type":"Circle"},"hover_glyph":null,"muted_glyph":{"id":"e9fffc3a-e9d7-4070-80eb-6cc149d7de8e","type":"Circle"},"nonselection_glyph":{"id":"df610929-5faa-4530-8abc-7dddc296d94f","type":"Circle"},"selection_glyph":null,"view":{"id":"43a79548-e594-4621-8adf-2c81a7e17b8d","type":"CDSView"}},"id":"d453bfcd-39ae-4d72-930b-38e9b34d097c","type":"GlyphRenderer"},{"attributes":{},"id":"56980ed7-d2af-48d3-b34a-d4198bb595c5","type":"LinearScale"},{"attributes":{"callback":null,"formatters":{"Maturity_Date":"datetime"},"renderers":[{"id":"9126a374-5dc5-4f3a-8700-1f873ed85ca5","type":"GlyphRenderer"}],"tooltips":[["Issuer","@Issuer"],["Currency","@Currency"],["Coupon","@Coupon"],["Maturity","@Maturity_Date{%F}"],["Seniority","@Seniority"],["Rating","@Rating"],["Amt. Outstanding","@Amount_Outstanding m"],["Sector","@{Sector}"],["Country","@Country_of_Incorporation"],["LTM Leverage","@Net_Debt_EBITDA"],["NTM Leverage","@Net_Debt_EBITDA_Fwd_Parent"],["Total Debt/Capital %","@Total_Debt_Capital_Parent"],["Call Price","@Next_Call_Price"],["Call Date","@Next_Call_Date"],["Price","@Price"],["Current Yield","@Current_Yield"],["3m % change","@Price_Change_3m_pct"],["YTW","@YTW_true"],["YTW est.","@YTW_predicted"]]},"id":"f20a83b6-3677-4a34-8636-45295f66aeb6","type":"HoverTool"},{"attributes":{},"id":"77987025-664c-41d9-8a9b-1d61a7164247","type":"LinearScale"},{"attributes":{"below":[{"id":"947ee73b-4953-4ca1-8be8-54ba2c4360e1","type":"LinearAxis"}],"left":[{"id":"0aa68208-d349-4b1d-a84d-dc54d90cb151","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":1200,"renderers":[{"id":"947ee73b-4953-4ca1-8be8-54ba2c4360e1","type":"LinearAxis"},{"id":"bdc6907e-0672-4658-baa4-8d93050f3a06","type":"Grid"},{"id":"0aa68208-d349-4b1d-a84d-dc54d90cb151","type":"LinearAxis"},{"id":"84464a28-61c0-430d-9786-82a319e79ab8","type":"Grid"},{"id":"3e12edb8-0df2-4d8e-8f88-e5fb634763e8","type":"BoxAnnotation"},{"id":"a051e887-7176-4dab-afa7-8b7cbfa438ce","type":"GlyphRenderer"}],"title":{"id":"ccbc0061-7299-41f8-8f5d-af0b69c81b17","type":"Title"},"toolbar":{"id":"5cfa3fa6-99d5-4633-aa53-39f274cee542","type":"Toolbar"},"x_range":{"id":"e63166df-1137-45f9-9e83-285189fbcfca","type":"Range1d"},"x_scale":{"id":"5dfb0854-6a4b-455f-8790-5a1fa70f5e68","type":"LinearScale"},"y_range":{"id":"2454fe3d-3555-4d94-9495-a41eb9f64590","type":"Range1d"},"y_scale":{"id":"2fde70d4-b50c-4da8-ab71-9039bb6019d4","type":"LinearScale"}},"id":"c20f752c-5266-4624-a2f5-2f908779f770","subtype":"Figure","type":"Plot"},{"attributes":{"below":[{"id":"4a6cecce-345a-4773-b637-eb62b91440ee","type":"LinearAxis"}],"left":[{"id":"e625d9f7-e92e-43d7-b84f-fa3286b173fd","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":1200,"renderers":[{"id":"4a6cecce-345a-4773-b637-eb62b91440ee","type":"LinearAxis"},{"id":"004bae0d-82a7-4921-9371-c8d36bbb2c38","type":"Grid"},{"id":"e625d9f7-e92e-43d7-b84f-fa3286b173fd","type":"LinearAxis"},{"id":"95b19896-0ba7-4970-b0bb-a542e7c0a800","type":"Grid"},{"id":"e23c1af2-bb83-47f8-87b9-dc6a6e2c1d1b","type":"BoxAnnotation"},{"id":"9126a374-5dc5-4f3a-8700-1f873ed85ca5","type":"GlyphRenderer"}],"title":{"id":"19834cb9-eca2-43b3-965c-7180aa36dc36","type":"Title"},"toolbar":{"id":"40b8c17f-2b18-49ca-ba17-d00dc65f414e","type":"Toolbar"},"x_range":{"id":"4a8216da-43f6-41ef-8b77-013a10ae79c3","type":"Range1d"},"x_scale":{"id":"56980ed7-d2af-48d3-b34a-d4198bb595c5","type":"LinearScale"},"y_range":{"id":"1526643d-c37c-44b7-8120-c32c91758ea9","type":"Range1d"},"y_scale":{"id":"83138ca2-887f-47e9-830d-69f20b3fe33b","type":"LinearScale"}},"id":"009b76b0-7665-4ef8-ad46-8cc0f653be03","subtype":"Figure","type":"Plot"},{"attributes":{"axis_label":"YTW_true","bounds":"auto","formatter":{"id":"514043eb-a0d9-494f-b8ec-047d73138180","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"eadecdcf-1e73-4186-b7de-efdf3e743a78","subtype":"Figure","type":"Plot"},"ticker":{"id":"a6aeeaed-13e4-4a70-aa22-1b271143d44f","type":"BasicTicker"}},"id":"135aad9b-3faa-4315-af3c-5a2b99dfcc03","type":"LinearAxis"},{"attributes":{},"id":"18980020-b7ff-494f-b8a5-73d2518299c5","type":"PanTool"},{"attributes":{"axis_label":"YTW_true","bounds":"auto","formatter":{"id":"8c4566ac-0aab-494c-9fa7-1ec278bf9749","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"c20f752c-5266-4624-a2f5-2f908779f770","subtype":"Figure","type":"Plot"},"ticker":{"id":"7fd1a8a3-e3da-473f-9a3b-2a838fb9c0c7","type":"BasicTicker"}},"id":"0aa68208-d349-4b1d-a84d-dc54d90cb151","type":"LinearAxis"},{"attributes":{},"id":"054268d1-4c78-438e-9ac6-e1ecfb33bbcc","type":"BasicTickFormatter"},{"attributes":{},"id":"90f0fc35-fa8c-44f9-b09f-47a5eed37d6b","type":"PanTool"},{"attributes":{"callback":null,"end":6.687,"start":0.131},"id":"f9bd10d7-7954-4a0b-a665-6a1d74d76cb7","type":"Range1d"},{"attributes":{"source":{"id":"e6e0b173-6daf-4dea-beb5-eb6241b673f8","type":"ColumnDataSource"}},"id":"6f096773-f20c-4094-a2ca-4c1e4d270389","type":"CDSView"},{"attributes":{"overlay":{"id":"e23c1af2-bb83-47f8-87b9-dc6a6e2c1d1b","type":"BoxAnnotation"}},"id":"ce2fce9d-7d1b-4749-9912-b6bf525dc899","type":"BoxZoomTool"},{"attributes":{},"id":"6c00d621-475e-477d-a62d-aa628965a462","type":"UnionRenderers"},{"attributes":{},"id":"95a2e857-b892-4ed3-97d8-2e00f3ede6c0","type":"ResetTool"},{"attributes":{},"id":"e3a3f473-5469-4b19-922d-193fbd427cfc","type":"BasicTickFormatter"},{"attributes":{"plot":null,"text":"Australia","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"19834cb9-eca2-43b3-965c-7180aa36dc36","type":"Title"},{"attributes":{"source":{"id":"e35c02fe-f1b9-475b-b8d3-ff65948dbb49","type":"ColumnDataSource"}},"id":"43a79548-e594-4621-8adf-2c81a7e17b8d","type":"CDSView"},{"attributes":{},"id":"27bbb269-53fe-4144-84d2-6195bfd81ae2","type":"UnionRenderers"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"cfcfe949-a8f9-4f7e-93ac-f0275b02949a","type":"Circle"},{"attributes":{"child":{"id":"c20f752c-5266-4624-a2f5-2f908779f770","subtype":"Figure","type":"Plot"},"title":"Industrials"},"id":"73082ad3-456d-4623-980a-969dcb846d04","type":"Panel"},{"attributes":{"source":{"id":"ebef5669-b83b-47b2-8d1a-e8b45e77cfe0","type":"ColumnDataSource"}},"id":"fb5b5434-38f6-45ce-82b4-415c73d0ff7e","type":"CDSView"},{"attributes":{},"id":"d8c9a4ae-12c4-4d6d-b466-47a39fc0105e","type":"PanTool"},{"attributes":{"overlay":{"id":"4acc1dbc-70d7-4c08-a080-fca98b20a86e","type":"BoxAnnotation"}},"id":"99840b83-1fe4-4395-bced-66e9cd5f0753","type":"BoxZoomTool"},{"attributes":{},"id":"cd46449c-f9e6-4c24-9483-bc6af72c2eb6","type":"SaveTool"},{"attributes":{},"id":"10a3ef48-d7a5-4740-b048-911cfbd303b3","type":"BasicTickFormatter"},{"attributes":{"callback":null,"formatters":{"Maturity_Date":"datetime"},"renderers":[{"id":"d453bfcd-39ae-4d72-930b-38e9b34d097c","type":"GlyphRenderer"}],"tooltips":[["Issuer","@Issuer"],["Currency","@Currency"],["Coupon","@Coupon"],["Maturity","@Maturity_Date{%F}"],["Seniority","@Seniority"],["Rating","@Rating"],["Amt. Outstanding","@Amount_Outstanding m"],["Sector","@{Sector}"],["Country","@Country_of_Incorporation"],["LTM Leverage","@Net_Debt_EBITDA"],["NTM Leverage","@Net_Debt_EBITDA_Fwd_Parent"],["Total Debt/Capital %","@Total_Debt_Capital_Parent"],["Call Price","@Next_Call_Price"],["Call Date","@Next_Call_Date"],["Price","@Price"],["Current Yield","@Current_Yield"],["3m % change","@Price_Change_3m_pct"],["YTW","@YTW_true"],["YTW est.","@YTW_predicted"]]},"id":"577393c7-7cb4-416e-9b43-4ba6748c0f33","type":"HoverTool"},{"attributes":{},"id":"603e420c-259f-4439-8270-b8c87906d2d1","type":"BasicTicker"},{"attributes":{},"id":"b4888540-3577-4c98-b3a4-c492b041f10f","type":"Selection"},{"attributes":{"overlay":{"id":"2d0bd8bc-9da7-4ce0-98fa-07b052cf81c6","type":"BoxAnnotation"}},"id":"1e034844-3f24-472b-b1b0-fe152499b2cf","type":"BoxZoomTool"},{"attributes":{"callback":null,"data":{"Amount_Outstanding":{"__ndarray__":"CtejcD2KRkA=","dtype":"float64","shape":[1]},"Country_of_Incorporation":["Australia"],"Coupon":{"__ndarray__":"MzMzMzOzIEA=","dtype":"float64","shape":[1]},"Currency":["Australian Dollar"],"Current_Yield":{"__ndarray__":"M4Ryp1FdIEA=","dtype":"float64","shape":[1]},"Issuer":["CF Asia Pacific Group Pty Ltd"],"Leverage":["-"],"Maturity_Date":{"__ndarray__":"AAAAL2dhd0I=","dtype":"float64","shape":[1]},"Net_Debt_EBITDA":["-"],"Net_Debt_EBITDA_Fwd_Parent":["-"],"Next_Call_Date":["2018-11-30"],"Next_Call_Price":["103.0"],"Price":{"__ndarray__":"MzMzMzODWUA=","dtype":"float64","shape":[1]},"Price_Change_3m_pct":{"__ndarray__":"AAAAAAAA+H8=","dtype":"float64","shape":[1]},"Rating":["-"],"Sector":["Industrials"],"Seniority":["Senior Unsecured"],"Total_Debt_Capital_Parent":["-"],"YTW_predicted":{"__ndarray__":"1lUWaojVE0A=","dtype":"float64","shape":[1]},"YTW_true":{"__ndarray__":"c2iR7Xy/GkA=","dtype":"float64","shape":[1]},"size_Amount_Outstanding":{"__ndarray__":"37aqrIRrDUA=","dtype":"float64","shape":[1]}},"selected":{"id":"dc9d9da3-21b1-4e58-9ed2-89baa6c41b1c","type":"Selection"},"selection_policy":{"id":"e7c37a77-81f9-41c3-993e-176f320fe97a","type":"UnionRenderers"}},"id":"7edc7bb8-446f-4fc3-a57a-ed8ad05d08c0","type":"ColumnDataSource"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"Rating","transform":{"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"Rating","transform":{"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"466856a1-aee1-4445-8bdd-4d51b757856e","type":"Circle"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"Rating","transform":{"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"Rating","transform":{"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"e9fffc3a-e9d7-4070-80eb-6cc149d7de8e","type":"Circle"},{"attributes":{"axis_label":"YTW_predicted","bounds":"auto","formatter":{"id":"67a70393-45ec-4382-b221-7658a0a94235","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"1c90c8ed-0e65-41d6-a361-ef88f58bf147","subtype":"Figure","type":"Plot"},"ticker":{"id":"e0f288a6-e865-4b77-b8d6-8c943ef74a5c","type":"BasicTicker"}},"id":"0c5a9c14-42cc-4ccc-867e-7d770026f7e4","type":"LinearAxis"},{"attributes":{"overlay":{"id":"3e12edb8-0df2-4d8e-8f88-e5fb634763e8","type":"BoxAnnotation"}},"id":"5ef47967-5b29-42e5-b828-6ed861045636","type":"BoxZoomTool"},{"attributes":{},"id":"d044dc02-5bb3-4c48-b3a7-3d397906fcc1","type":"BasicTicker"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"72f1da59-4146-4ffb-a400-c1b66103cc46","type":"Circle"},{"attributes":{"child":{"id":"eadecdcf-1e73-4186-b7de-efdf3e743a78","subtype":"Figure","type":"Plot"},"title":"Materials"},"id":"a378be64-d7f1-41db-8de9-b0a11034d9d6","type":"Panel"},{"attributes":{"callback":null,"end":7.953606324245992,"start":-0.07918323343203326},"id":"4a8216da-43f6-41ef-8b77-013a10ae79c3","type":"Range1d"},{"attributes":{"source":{"id":"4951c8d7-cc79-4657-b6b7-f1dfd2f4ae0b","type":"ColumnDataSource"}},"id":"ad4ace74-7464-4a05-a130-142b05d60c65","type":"CDSView"},{"attributes":{},"id":"514043eb-a0d9-494f-b8ec-047d73138180","type":"BasicTickFormatter"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"0e5e671b-4864-444d-9feb-60b04a329ef6","type":"HoverTool"},{"id":"0da52710-cd7a-42da-91dd-95614d890eb8","type":"SaveTool"},{"id":"bb1a5e53-3ac5-4906-9a8a-5849db7bad1c","type":"PanTool"},{"id":"0e2a07c0-adaf-41c5-acd7-deec7beeb312","type":"WheelZoomTool"},{"id":"6c5e4b02-a575-4fd1-8fbc-db84d39bb01c","type":"BoxZoomTool"},{"id":"36db368c-417e-46c1-868f-eb4504ece104","type":"ResetTool"}]},"id":"b521a171-d157-4d3c-8fd5-e28c778451a0","type":"Toolbar"},{"attributes":{"callback":null,"formatters":{"Maturity_Date":"datetime"},"renderers":[{"id":"226a2066-f5c5-4166-a67a-a89d34643450","type":"GlyphRenderer"}],"tooltips":[["Issuer","@Issuer"],["Currency","@Currency"],["Coupon","@Coupon"],["Maturity","@Maturity_Date{%F}"],["Seniority","@Seniority"],["Rating","@Rating"],["Amt. Outstanding","@Amount_Outstanding m"],["Sector","@{Sector}"],["Country","@Country_of_Incorporation"],["LTM Leverage","@Net_Debt_EBITDA"],["NTM Leverage","@Net_Debt_EBITDA_Fwd_Parent"],["Total Debt/Capital %","@Total_Debt_Capital_Parent"],["Call Price","@Next_Call_Price"],["Call Date","@Next_Call_Date"],["Price","@Price"],["Current Yield","@Current_Yield"],["3m % change","@Price_Change_3m_pct"],["YTW","@YTW_true"],["YTW est.","@YTW_predicted"]]},"id":"c4b4720d-9da6-4a54-b205-d10d5589d6f4","type":"HoverTool"},{"attributes":{"callback":null,"formatters":{"Maturity_Date":"datetime"},"renderers":[{"id":"a051e887-7176-4dab-afa7-8b7cbfa438ce","type":"GlyphRenderer"}],"tooltips":[["Issuer","@Issuer"],["Currency","@Currency"],["Coupon","@Coupon"],["Maturity","@Maturity_Date{%F}"],["Seniority","@Seniority"],["Rating","@Rating"],["Amt. Outstanding","@Amount_Outstanding m"],["Sector","@{Sector}"],["Country","@Country_of_Incorporation"],["LTM Leverage","@Net_Debt_EBITDA"],["NTM Leverage","@Net_Debt_EBITDA_Fwd_Parent"],["Total Debt/Capital %","@Total_Debt_Capital_Parent"],["Call Price","@Next_Call_Price"],["Call Date","@Next_Call_Date"],["Price","@Price"],["Current Yield","@Current_Yield"],["3m % change","@Price_Change_3m_pct"],["YTW","@YTW_true"],["YTW est.","@YTW_predicted"]]},"id":"bda772d7-6690-4ca8-b43b-504f0eb0e784","type":"HoverTool"},{"attributes":{},"id":"7fd1a8a3-e3da-473f-9a3b-2a838fb9c0c7","type":"BasicTicker"},{"attributes":{},"id":"4b183d61-9eee-473e-9f2b-55c08c52f56f","type":"BasicTickFormatter"},{"attributes":{"axis_label":"YTW_predicted","bounds":"auto","formatter":{"id":"763cc7cf-554d-4c6f-9a31-3043bafec622","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"65aa8109-eea1-4641-a269-701a8df9875c","subtype":"Figure","type":"Plot"},"ticker":{"id":"76bca8db-e6bf-4e6f-91f1-871335e86590","type":"BasicTicker"}},"id":"3c3fca95-c38e-4649-b7a4-4c0da053c3dd","type":"LinearAxis"},{"attributes":{},"id":"907839bd-f690-48a3-8b1b-68416ce08aa9","type":"SaveTool"},{"attributes":{},"id":"e7c37a77-81f9-41c3-993e-176f320fe97a","type":"UnionRenderers"},{"attributes":{},"id":"e64b8bea-0fc6-4f90-bcab-5675683451a8","type":"WheelZoomTool"},{"attributes":{},"id":"9cb02556-d95c-43e0-b6a4-6d5b2844ab02","type":"ResetTool"},{"attributes":{},"id":"a6aeeaed-13e4-4a70-aa22-1b271143d44f","type":"BasicTicker"},{"attributes":{"callback":null,"end":6.687,"start":0.131},"id":"1526643d-c37c-44b7-8120-c32c91758ea9","type":"Range1d"},{"attributes":{},"id":"83138ca2-887f-47e9-830d-69f20b3fe33b","type":"LinearScale"},{"attributes":{"axis_label":"YTW_true","bounds":"auto","formatter":{"id":"4b183d61-9eee-473e-9f2b-55c08c52f56f","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"009b76b0-7665-4ef8-ad46-8cc0f653be03","subtype":"Figure","type":"Plot"},"ticker":{"id":"fee0873e-41b3-4e9a-bbbd-54abd3ac4e1b","type":"BasicTicker"}},"id":"e625d9f7-e92e-43d7-b84f-fa3286b173fd","type":"LinearAxis"},{"attributes":{"dimension":1,"plot":{"id":"c20f752c-5266-4624-a2f5-2f908779f770","subtype":"Figure","type":"Plot"},"ticker":{"id":"7fd1a8a3-e3da-473f-9a3b-2a838fb9c0c7","type":"BasicTicker"}},"id":"84464a28-61c0-430d-9786-82a319e79ab8","type":"Grid"},{"attributes":{},"id":"31de31ca-f1ae-4e88-88b7-06afcc01f722","type":"UnionRenderers"},{"attributes":{},"id":"67a70393-45ec-4382-b221-7658a0a94235","type":"BasicTickFormatter"},{"attributes":{"axis_label":"YTW_predicted","bounds":"auto","formatter":{"id":"fd03f39f-62c2-4cd1-b804-76d89543e108","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"d6a9aa67-d303-4f22-b4c7-a79493c4a8f7","subtype":"Figure","type":"Plot"},"ticker":{"id":"d044dc02-5bb3-4c48-b3a7-3d397906fcc1","type":"BasicTicker"}},"id":"e953dac2-5a52-414e-9f87-3f9d2f29b1b7","type":"LinearAxis"},{"attributes":{"plot":{"id":"c20f752c-5266-4624-a2f5-2f908779f770","subtype":"Figure","type":"Plot"},"ticker":{"id":"603e420c-259f-4439-8270-b8c87906d2d1","type":"BasicTicker"}},"id":"bdc6907e-0672-4658-baa4-8d93050f3a06","type":"Grid"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"4acc1dbc-70d7-4c08-a080-fca98b20a86e","type":"BoxAnnotation"},{"attributes":{},"id":"c728298a-17af-4a85-a2b8-b045f3fee747","type":"BasicTicker"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"f20a83b6-3677-4a34-8636-45295f66aeb6","type":"HoverTool"},{"id":"cd8bb0cc-296e-4b9c-bfd8-db4e9b9c5c10","type":"SaveTool"},{"id":"d8c9a4ae-12c4-4d6d-b466-47a39fc0105e","type":"PanTool"},{"id":"316c2d84-49c2-4d74-9ebb-8fe4656f1d9d","type":"WheelZoomTool"},{"id":"ce2fce9d-7d1b-4749-9912-b6bf525dc899","type":"BoxZoomTool"},{"id":"9cb02556-d95c-43e0-b6a4-6d5b2844ab02","type":"ResetTool"}]},"id":"40b8c17f-2b18-49ca-ba17-d00dc65f414e","type":"Toolbar"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"b193d3ab-deae-4925-94de-b466ed12dc84","type":"Circle"},{"attributes":{},"id":"d5908812-efc5-44bc-b1bc-2782cb5e0568","type":"Selection"},{"attributes":{"below":[{"id":"0c5a9c14-42cc-4ccc-867e-7d770026f7e4","type":"LinearAxis"}],"left":[{"id":"be036a56-8686-4e5d-b28d-d9b97d464906","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":1200,"renderers":[{"id":"0c5a9c14-42cc-4ccc-867e-7d770026f7e4","type":"LinearAxis"},{"id":"a98e6406-74b1-4515-9607-a878dab90a9e","type":"Grid"},{"id":"be036a56-8686-4e5d-b28d-d9b97d464906","type":"LinearAxis"},{"id":"2e4d3fae-f9d0-474a-aa58-d0b8dc885513","type":"Grid"},{"id":"2d0bd8bc-9da7-4ce0-98fa-07b052cf81c6","type":"BoxAnnotation"},{"id":"a7ed77f9-95af-4d20-b07b-ab73b953e437","type":"GlyphRenderer"}],"title":{"id":"612ffa36-5996-4a1f-846e-2a3df3ab49fb","type":"Title"},"toolbar":{"id":"7b498c75-5e8a-4889-b15c-83f028a3142b","type":"Toolbar"},"x_range":{"id":"89120961-15e9-429d-ab64-345947f9187b","type":"Range1d"},"x_scale":{"id":"101a74fd-5a21-462e-ad03-83bec0f1980a","type":"LinearScale"},"y_range":{"id":"f9bd10d7-7954-4a0b-a665-6a1d74d76cb7","type":"Range1d"},"y_scale":{"id":"662d77f5-c23c-43a8-99e1-2645db09bc91","type":"LinearScale"}},"id":"1c90c8ed-0e65-41d6-a361-ef88f58bf147","subtype":"Figure","type":"Plot"},{"attributes":{"below":[{"id":"3c3fca95-c38e-4649-b7a4-4c0da053c3dd","type":"LinearAxis"}],"left":[{"id":"a2876ff0-4b23-4b06-b35d-06984d385dfb","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":1200,"renderers":[{"id":"3c3fca95-c38e-4649-b7a4-4c0da053c3dd","type":"LinearAxis"},{"id":"7061f32b-1081-466f-9dd7-8db72d57e93f","type":"Grid"},{"id":"a2876ff0-4b23-4b06-b35d-06984d385dfb","type":"LinearAxis"},{"id":"e538f02d-16b7-44ed-bc7c-fc8b5d3c805f","type":"Grid"},{"id":"3c472d61-9270-465c-95be-794a30f1dbad","type":"BoxAnnotation"},{"id":"226a2066-f5c5-4166-a67a-a89d34643450","type":"GlyphRenderer"}],"title":{"id":"79fb8a83-1303-487b-b7c4-d729c8d5ccd0","type":"Title"},"toolbar":{"id":"9f108c6a-fd2c-4cf0-ac75-57be369aee51","type":"Toolbar"},"x_range":{"id":"c82dd1d2-fd76-4985-80af-7181c379e8e5","type":"Range1d"},"x_scale":{"id":"77987025-664c-41d9-8a9b-1d61a7164247","type":"LinearScale"},"y_range":{"id":"dc6083f8-9a0c-4dfb-bbf7-19cd00a31fb5","type":"Range1d"},"y_scale":{"id":"fc38b1b4-c544-4b84-b005-593ed6235ae9","type":"LinearScale"}},"id":"65aa8109-eea1-4641-a269-701a8df9875c","subtype":"Figure","type":"Plot"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"3c472d61-9270-465c-95be-794a30f1dbad","type":"BoxAnnotation"},{"attributes":{},"id":"0da52710-cd7a-42da-91dd-95614d890eb8","type":"SaveTool"},{"attributes":{},"id":"89d498e7-5fb2-418d-add5-8892cb7eff5d","type":"BasicTicker"},{"attributes":{},"id":"c4af9766-aabd-472d-b912-14f5785348f3","type":"Selection"},{"attributes":{"callback":null,"end":7.953606324245992,"start":-0.07918323343203326},"id":"c82dd1d2-fd76-4985-80af-7181c379e8e5","type":"Range1d"},{"attributes":{},"id":"e7407632-22b3-43f8-8f6a-f08a0d63ab48","type":"BasicTicker"},{"attributes":{},"id":"ed7d28a8-27ae-4b57-831a-3b5cdbb5433d","type":"BasicTickFormatter"},{"attributes":{"factors":["A"],"palette":["#f99555"]},"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"},{"attributes":{},"id":"c46ea64d-2146-4e38-8619-8ab2715c3d7d","type":"UnionRenderers"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"e23c1af2-bb83-47f8-87b9-dc6a6e2c1d1b","type":"BoxAnnotation"},{"attributes":{"dimension":1,"plot":{"id":"eadecdcf-1e73-4186-b7de-efdf3e743a78","subtype":"Figure","type":"Plot"},"ticker":{"id":"a6aeeaed-13e4-4a70-aa22-1b271143d44f","type":"BasicTicker"}},"id":"0dac5202-b0ab-448e-8937-eba5ded50059","type":"Grid"},{"attributes":{},"id":"9480dffa-954c-45d3-90c0-47c130db7eaa","type":"BasicTickFormatter"},{"attributes":{"plot":{"id":"d6a9aa67-d303-4f22-b4c7-a79493c4a8f7","subtype":"Figure","type":"Plot"},"ticker":{"id":"d044dc02-5bb3-4c48-b3a7-3d397906fcc1","type":"BasicTicker"}},"id":"3695b54f-35d7-47bd-a19f-8f4551d72d15","type":"Grid"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"c4b4720d-9da6-4a54-b205-d10d5589d6f4","type":"HoverTool"},{"id":"907839bd-f690-48a3-8b1b-68416ce08aa9","type":"SaveTool"},{"id":"0bf3492e-76c6-4ccb-9f0a-ff80154c63fc","type":"PanTool"},{"id":"e64b8bea-0fc6-4f90-bcab-5675683451a8","type":"WheelZoomTool"},{"id":"919c0965-e802-4ca6-aeb1-b6cee21d47b6","type":"BoxZoomTool"},{"id":"7c943638-e75c-46ea-aad4-ee1984845284","type":"ResetTool"}]},"id":"9f108c6a-fd2c-4cf0-ac75-57be369aee51","type":"Toolbar"},{"attributes":{"factors":["A","BBB","-","A-","A+","AA-","BBB-","B-","BBB+"],"palette":["#f99555","#fee695","#8b8b8b","#fdb466","#f47245","#e75236","#fef7b1","#6bbf63","#fdd07d"]},"id":"22fd8d2c-fc10-48aa-9879-749529216ef4","type":"CategoricalColorMapper"},{"attributes":{},"id":"36db368c-417e-46c1-868f-eb4504ece104","type":"ResetTool"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"Rating","transform":{"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"Rating","transform":{"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"f7c8d36b-4127-41b9-83f1-b03c514cbd26","type":"Circle"},{"attributes":{"callback":null,"end":6.687,"start":0.131},"id":"2454fe3d-3555-4d94-9495-a41eb9f64590","type":"Range1d"},{"attributes":{"below":[{"id":"e953dac2-5a52-414e-9f87-3f9d2f29b1b7","type":"LinearAxis"}],"left":[{"id":"49953d79-fe0f-48a4-89b1-b7398c4c8efa","type":"LinearAxis"}],"min_border_bottom":10,"min_border_left":10,"min_border_right":10,"min_border_top":10,"plot_height":800,"plot_width":1200,"renderers":[{"id":"e953dac2-5a52-414e-9f87-3f9d2f29b1b7","type":"LinearAxis"},{"id":"3695b54f-35d7-47bd-a19f-8f4551d72d15","type":"Grid"},{"id":"49953d79-fe0f-48a4-89b1-b7398c4c8efa","type":"LinearAxis"},{"id":"10943efe-3863-4cfb-85a4-f21cd5ea5fea","type":"Grid"},{"id":"e4f1b877-ae3b-400b-89da-649d132b16c5","type":"BoxAnnotation"},{"id":"5362f364-a0f4-4e6d-bef5-93302b88445d","type":"GlyphRenderer"}],"title":{"id":"18af40e3-5647-451f-b7b0-3a0c32df0332","type":"Title"},"toolbar":{"id":"b521a171-d157-4d3c-8fd5-e28c778451a0","type":"Toolbar"},"x_range":{"id":"48d91bc4-c32d-4932-85fd-a843b275d6f3","type":"Range1d"},"x_scale":{"id":"e78c9a95-bb31-4443-acc4-e975ba4ae79d","type":"LinearScale"},"y_range":{"id":"ccdb6aba-4d27-48cb-929d-67bb11d418af","type":"Range1d"},"y_scale":{"id":"68e5fc5f-d9e2-41f7-9b9e-0b5d4dad28e9","type":"LinearScale"}},"id":"d6a9aa67-d303-4f22-b4c7-a79493c4a8f7","subtype":"Figure","type":"Plot"},{"attributes":{},"id":"e0f288a6-e865-4b77-b8d6-8c943ef74a5c","type":"BasicTicker"},{"attributes":{"plot":null,"text":"Real Estate","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"79fb8a83-1303-487b-b7c4-d729c8d5ccd0","type":"Title"},{"attributes":{},"id":"2fde70d4-b50c-4da8-ab71-9039bb6019d4","type":"LinearScale"},{"attributes":{"dimension":1,"plot":{"id":"1c90c8ed-0e65-41d6-a361-ef88f58bf147","subtype":"Figure","type":"Plot"},"ticker":{"id":"c728298a-17af-4a85-a2b8-b045f3fee747","type":"BasicTicker"}},"id":"2e4d3fae-f9d0-474a-aa58-d0b8dc885513","type":"Grid"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"6ba7642c-36ae-442f-99de-1fd5470f6a1f","type":"Circle"},{"attributes":{},"id":"101a74fd-5a21-462e-ad03-83bec0f1980a","type":"LinearScale"},{"attributes":{"child":{"id":"1c90c8ed-0e65-41d6-a361-ef88f58bf147","subtype":"Figure","type":"Plot"},"title":"Consumer Discretionary"},"id":"5a719421-4c96-4b00-95ad-6b6050012181","type":"Panel"},{"attributes":{"factors":["BBB","B-"],"palette":["#fee695","#6bbf63"]},"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"},{"attributes":{"callback":null,"data":{"Amount_Outstanding":{"__ndarray__":"rkfhehQadEBxPQrXo0hlQAAAAAAArHlAw/UoXI9CPkDXo3A9Cg9vQAAAAAAAEIpAAAAAAAAAMEAK16NwPYpGQJqZmZmZKWlA4XoUrkdhXEDsUbgehetSQFK4HoXrjYBAzczMzMxIdUApXI/C9WBsQGZmZmZmvn5ASOF6FK4DekD2KFyPwoVZQClcj8L1YGxAMzMzMzPrYkDNzMzMzEh1QDMzMzMz62JACtejcD2md0B7FK5H4XojQIXrUbgeRT5ArkfhehSmZ0ApXI/C9WBsQDMzMzMz62JA7FG4HoXrUkBxPQrXo7yBQDMzMzMzsyZAMzMzMzOzJkBI4XoUrkceQEjhehSuRx5A7FG4HoXrUkAzMzMzM+tiQOxRuB6FA2pAMzMzMzPrYkDhehSuR2FcQOxRuB6F61JAZmZmZmamV0BmZmZmZqZXQOxRuB6F61JA7FG4HoXrUkBmZmZmZqZXQOxRuB6F61JA7FG4HoXrUkAAAAAAAPiRQAAAAAAAwJJAAAAAAABwh0CPwvUoXOuCQOxRuB6FA2pAMzMzMzPrYkA9CtejcFFwQAAAAAAAOINA7FG4HoUDakBxPQrXo7yBQClcj8L11HhAUrgeheuNgECPwvUoXOtyQClcj8L1YHxA4XoUrkdhXECuR+F6FKZnQArXo3A9pndAcT0K16NIZUDsUbgehetSQI/C9Shc63JA","dtype":"float64","shape":[66]},"Country_of_Incorporation":["Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia"],"Coupon":{"__ndarray__":"7FG4HoXrBkAAAAAAAAAOQH9qvHSTGNw/ObTIdr6f6j/NzMzMzMwTQM3MzMzMzBdAzczMzMzMF0AzMzMzM7MgQM3MzMzMzBdAzczMzMzMBEAAAAAAAAAKQAAAAAAAAA5AZmZmZmZmEECF61G4HoUGQAAAAAAAAA5AAAAAAAAACkAAAAAAAAAUQAAAAAAAABZAAAAAAAAAGEAAAAAAAAAVQKRwPQrXIxZAAAAAAAAAEkAAAAAAAAAZQAAAAAAAABVAAAAAAAAADkAAAAAAAAAMQAAAAAAAABVAFK5H4XoUBkDsUbgehesEQM3MzMzMzBZAH4XrUbgeGEBxPQrXo3AXQKRwPQrXowpAAAAAAAAAFkAAAAAAAAAUQAAAAAAAAAxAZmZmZmZmFEBmZmZmZmYUQAAAAAAAAAZAAAAAAAAABEAAAAAAAAAGQAAAAAAAAAVAAAAAAAAABUAAAAAAAAAHQAAAAAAAAARAAAAAAAAABUDNzMzMzMwUQAAAAAAAAA5AAAAAAACAHEBmZmZmZmYIQK5H4XoUrgBAAAAAAAAACkDNzMzMzMwQQAAAAAAAABpAAAAAAAAACkCkcD0K16MEQD0K16NwPQZA4XoUrkfhBUAAAAAAAAAQQJqZmZmZmQVAAAAAAAAAEEAAAAAAAAAKQJqZmZmZmQdAAAAAAAAADEDhehSuR+EJQAAAAAAAAApA","dtype":"float64","shape":[66]},"Currency":["Australian Dollar","Australian Dollar","Japanese Yen","Japanese Yen","US Dollar","US Dollar","US Dollar","Australian Dollar","US Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","US Dollar","US Dollar","US Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","US Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar"],"Current_Yield":{"__ndarray__":"JBCb3p+7BkA1rhZ6DnQNQBdiBk81+ts/khuV+T8S6j+X7sWsfTYTQMP1ZK71tRRAw/VkrvW1FEAzhHKnUV0gQEwJ8KlqsRZAXTAizc7YBECIQJOixuIJQOp/sr1HZQ1AIgGkZ/pdEEDlSGiyanoGQEtFjyH/xQ1A3hnqZFQDCkDnaQeEq1sTQJ3toT/zNRRA7Of+CZlPF0BSWsI43vITQDH1a8tecBVAjbfFxFiqEUD+MLKZwHMXQAqA9NgXpRNALAbYfXWNDUBV18OCF88LQIUpNT4uhRRAuPnBPbcgBkD9KAXEB+AEQGy6M1Z1uRRAIx5CqcZ+FUBCuxn4yhQVQAKR0GssiwpAGCDh3OQ2FUCbI1BlObYTQIkC039GqAtAvtO4Bc1RFED2sUJyHYwUQIQ5JlXH9gVAhhvvStECBEAGJMteXA8GQDVysbGqGwVAmQHFITAdBUCnh9xSRO8GQI0y4c54DARAewi3mV0NBUCBLQcPPBgSQDzw4im5vw1AaLPIbHB+FkACagO6cwgIQLaWkt6OsABAzolCoPjACUBU1XFeimUQQO8MiXk7QxpAkC6afPA9CkCrkEpWBbAEQEsNu3FpUgZA1q7xsffFBUB/7c8Tkm0PQPB2hX6YsgVA8Y2VfN1/D0D9PVyNet8JQPmMOrhhqgdAFp+HrSALDED1f3l2ldQJQFhmX0KJGwpA","dtype":"float64","shape":[66]},"Issuer":["BNP Paribas Australia and New Zealand","BNPP Fund Services Australasia Pty Ltd","BNPP SA (Australia branch)","BNPP SA (Australia branch)","Barrick (PD) Australia Finance Pty Ltd","Barrick (PD) Australia Finance Pty Ltd","Barrick (PD) Australia Finance Pty Ltd","CF Asia Pacific Group Pty Ltd","CIMIC Finance (USA) Pty Ltd","Caterpillar Financial Australia Limited","Daimler Australia/Pacific Pty Ltd","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","FBG Finance Pty Ltd.","GE Capital Australia Funding Pty Ltd","GE Capital Australia Funding Pty Ltd","GE Capital Australia Funding Pty Ltd","GE Capital Australia Funding Pty Ltd","Genworth Financial Mortgage Insurance Pty Ltd","Glencore Australia Holdings Pty Limited","Global Switch Property (Australia) Pty Limited","HSBC Bank Australia Limited","Holcim Finance (Australia) Pty Ltd","Holcim Finance (Australia) Pty Ltd","Holcim Finance (Australia) Pty Ltd","Hongkong and Shanghai Banking Corporation Limited, Sydney Branch","Hongkong and Shanghai Banking Corporation Limited, Sydney Branch","ING Bank (Australia) Limited","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","ING Bank N.V. (Sydney Branch)","John Deere Financial Limited","Liberty Financial Pty Ltd","Liberty Financial Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Rio Tinto Finance (USA) Limited","Rio Tinto Finance (USA) Limited","Rio Tinto Finance (USA) Limited","Royal Bank of Canada (Sydney Branch)","Royal Bank of Canada (Sydney Branch)","Royal Bank of Canada (Sydney Branch)","Royal Bank of Canada (Sydney Branch)","Tronox Limited (NYSE:TROX)","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","UBS AG, Australia Branch","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited","Volkswagen Financial Services Australia Pty Limited"],"Leverage":["-","-","-","-","0-2x","0-2x","0-2x","-","0-2x","2-4x","5-6x","4-5x","4-5x","4-5x","4-5x","4-5x","8-10x","8-10x","8-10x","8-10x","0-2x","2-4x","-","-","8-10x","8-10x","8-10x","-","-","-","-","-","-","-","-","6-8x","-","-","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x","0-2x","0-2x","0-2x","-","-","-","-","5-6x","-","-","-","-","-","-","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x"],"Maturity_Date":{"__ndarray__":"AABAeUgjd0IAAEB5SCN3QgAAAE3I03ZCAABAdtQfeUIAAAD/Z/p2QgAA4HACBoBCAADgcAIGgEIAAAAvZ2F3QgAAwJLkRnhCAAAAduQkd0IAAIBElHJ2QgAAwHljPHdCAABAT7t8ekIAAMCLATF4QgAAABdKHHlCAADAiwExeEIAAMDgrdZ2QgAAAAWsJ3hCAACAX+qXdkIAAMCaZkV3QgAAAFTZfHlCAACAGG3UdkIAAEBTzmh3QgAAgPFTMXhCAAAAbwEPd0IAAED0nBZ4QgAAgFJannZCAABA4zRUd0IAAIAGZil3QgAAQI++4HhCAACAIonKeEIAAIBDjNN4QgAAALVIoHZCAACARgDXdkIAAIByJ3V2QgAAAN5k8XZCAACA2NImd0IAAIDaPot3QgAAQMwfrnZCAAAA/jHIdkIAAMDqMoN3QgAAgMx4X3dCAADAqCxxd0IAAIB1yQt3QgAAQMDF5nZCAAAAl+ctd0IAAODAzkOAQgAAgCwOd3lCAAAAt3nhekIAAMAEU3Z3QgAAQNh5dXZCAACAVMYCd0IAAIAHyu55QgAAgADn2HlCAAAASOhreEIAAIAi8oB3QgAAAEjoa3hCAABA9AXNdkIAAED0Bc12QgAAAKtaPXdCAADAIrTodkIAAMBjhMh2QgAAQDGVLXdCAADAuZQzeEIAAMC5lDN4QgAAgHGIjHdC","dtype":"float64","shape":[66]},"Net_Debt_EBITDA":["-","-","-","-","1.01x","1.01x","1.01x","-","0.52x","2.70x","5.96x","4.92x","4.92x","4.92x","4.92x","4.92x","9.49x","9.49x","9.49x","9.49x","1.88x","2.68x","-","-","9.65x","9.65x","9.65x","-","-","-","-","-","-","-","-","7.48x","-","-","5.96x","5.96x","5.96x","5.96x","5.96x","5.96x","5.96x","5.96x","0.22x","0.22x","0.22x","-","-","-","-","5.53x","-","-","-","-","-","-","5.40x","5.40x","5.40x","5.40x","5.40x","5.40x"],"Net_Debt_EBITDA_Fwd_Parent":["-","-","-","-","1.06x","1.06x","1.06x","-","0.46x","2.60x","5.30x","4.45x","4.45x","4.45x","4.45x","4.45x","3.39x","3.39x","3.39x","3.39x","-","1.76x","-","-","2.39x","2.39x","2.39x","-","-","-","-","-","-","-","-","7.04x","-","-","5.30x","5.30x","5.30x","5.30x","5.30x","5.30x","5.30x","5.30x","-","-","-","-","-","-","-","3.56x","-","-","-","-","-","-","4.03x","4.03x","4.03x","4.03x","4.03x","4.03x"],"Next_Call_Date":["-","-","-","-","-","-","-","2018-11-30","-","-","-","-","-","-","-","-","-","-","-","-","2020-07-03","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","2025-03-15","-","-","-","-","-","2021-04-15","-","-","-","-","-","-","-","-","-","-","-","-"],"Next_Call_Price":["-","-","-","-","-","-","-","103.0","-","-","-","-","-","-","-","-","-","-","-","-","100.0","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","-","100.0","-","-","-","-","-","103.25","-","-","-","-","-","-","-","-","-","-","-","-"],"Price":{"__ndarray__":"6SYxCKw0WUAQWDm0yHZZQEJg5dAiG1lASOF6FK6HWUDdJAaBlcNZQLTIdr6fulxAtMh2vp+6XEAzMzMzM4NZQNV46SYxOFpAmpmZmZnxWEBOYhBYORxZQN0kBoGVg1lAvp8aL90MWUCWQ4ts5wtZQGIQWDm0MFlAzczMzMz8WEBOYhBYOdRZQDvfT42XNltAd76fGi+9WUDhehSuR1FaQOF6FK5H0VlA8KfGSzd5WUBmZmZmZqZaQLbz/dR4uVpAN4lBYOVgWUCHFtnO9ytZQBKDwMqhlVlAGQRWDi3yWED2KFyPwg1ZQClcj8L1gFtAL90kBoENXEBqvHSTGMxbQKwcWmQ7F1lAokW28/3sWUAhsHJokV1ZQJ7vp8ZLT1lA001iEFgZWUAnMQisHNJYQNEi2/l+CllAFK5H4Xr8WEA730+Nl+5YQKwcWmQ731hAPQrXo3DdWEAK16NwPRJZQJzEILBy8FhA46WbxCDwWEC+nxov3bxcQLx0kxgENllAvp8aL92sX0B9PzVeumFZQD81XrpJ/FhAd76fGi89WUA9CtejcJ1ZQAAAAAAAwFhAokW28/3EWEDhehSuR/FYQI2XbhKD6FhAj8L1KFwfWUAUrkfhenRZQDMzMzMz41hABFYOLbJlWUCBlUOLbB9ZQIPAyqFF7lhArkfhehT2WEA/NV66SQxZQBKDwMqh5VhA","dtype":"float64","shape":[66]},"Price_Change_3m_pct":{"__ndarray__":"YhBYObTIxr9zaJHtfD/Vv/Cnxks3icE/5/up8dJNwj8fhetRuB71vylcj8L1KB3AKVyPwvUoHcAAAAAAAAD4f65H4XoUrgXAWmQ730+Np79/arx0kxjUv6JFtvP91Mi/qMZLN4lB2L+8dJMYBFbOv8uhRbbz/bS/nMQgsHJowb/y0k1iEFjlv8UgsHJokeW/dZMYBFYO7b+wcmiR7Xznv4lBYOXQIqu/5dAi2/l+2r+kcD0K16Pwv0SLbOf7qem/uB6F61G4zr/6fmq8dJO4v0Jg5dAi2+W/AAAAAAAA+H85tMh2vp+6v7pJDAIrh7a/+n5qvHST6L9YObTIdr7nv/yp8dJNYsC/aJHtfD816r9aZDvfT43nv3WTGARWDs2/AiuHFtnOtz8AAAAAAAD4f4/C9Shcj8K/oBov3SQGwb8AAAAAAAD4f/p+arx0k3i/uB6F61G4nj956SYxCKy8v0oMAiuHFqm/sp3vp8ZLtz8K16NwPQoRwFyPwvUoXAPAFK5H4XoUCMDsUbgehevRv5qZmZmZmZm/gZVDi2zny7/dJAaBlUPTvwAAAAAAAPh/AAAAAAAA+H8AAAAAAAD4fwAAAAAAAPh/F9nO91Pjxb91kxgEVg7hv8UgsHJokdW/IbByaJHt1L+HFtnO91PDv9ejcD0K18O/arx0kxgEtj+JQWDl0CK7PwAAAAAAAPh/","dtype":"float64","shape":[66]},"Rating":["A","A","A","A","BBB","BBB","BBB","-","BBB","A","A","A-","A-","A-","A-","A-","A","A","A","A","A-","BBB","BBB","A+","BBB","BBB","BBB","-","AA-","A+","A+","A+","-","A+","A+","A","BBB-","BBB-","A","A","A","A","A","A","A","A","A","A","A","AA-","AA-","AA-","AA-","B-","A+","A+","A+","A+","A+","A+","BBB+","BBB+","BBB+","BBB+","BBB+","BBB+"],"Sector":["Financials","Financials","Financials","Financials","Financials","Financials","Financials","Industrials","Financials","Financials","Consumer Discretionary","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Materials","Real Estate","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Materials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials","Financials"],"Seniority":["Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Subordinate","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured"],"Total_Debt_Capital_Parent":["-","-","-","-","36.2%","36.2%","36.2%","-","60.9%","69.8%","65.9%","59.4%","59.4%","59.4%","59.4%","59.4%","62.1%","62.1%","62.1%","62.1%","24.1%","40.7%","-","-","37.5%","37.5%","37.5%","-","-","-","-","-","-","-","-","81.5%","-","-","65.9%","65.9%","65.9%","65.9%","65.9%","65.9%","65.9%","65.9%","22.9%","22.9%","22.9%","-","-","-","-","75.6%","-","-","-","-","-","-","59.8%","59.8%","59.8%","59.8%","59.8%","59.8%"],"YTW_predicted":{"__ndarray__":"aHNERgLUBEDt89x6WUYJQABs+zVaRbS/UGCV1xDi2j+3ZVVv7moLQDhDBSePcRJAg2mD2D3vEkDWVRZqiNUTQDZSJZQRoRBAZPMS0rL1BEB4stxXL8sFQLwaifb27QZAlPwl9Q5PC0C/fmZB6OoFQI4XhhSoKQlAv1GMiegXB0C+CEVPTtEKQJ0gwEu0dQ1AkmnGhIGdDEBqeiUzw9wLQPYjJkrriw5AF3ytKdevEEDuSfFHoAsQQHGpPwpr0QpAz3lttnhWCUCO4LC7yhkKQEGQp6Kr7gtAqpL4/UdWCkB0UunFTWQFQOtw4kfDkQxAp2QXHv6NDkAv1Ec3Vj0OQI8sQ8TeXwpA0+WOhrclC0Bp5WLpBJoJQAbQPkZHZAdAMdJAMTPxDUCdjydAknUOQFaaNHYeEgVASraprDmyBEAiCUYmcCkGQOnoS2eQwwVAzk4vfhHPBUCQ/Ry429IFQOJuaQGD2ARA2fF4Uyd0BUDLIzjpe7gRQAr4wvC06A1A9OumYqx3EUC4QGmbjlYFQO/LziCeFAJANESwu2+VBUDnNdMo8OcKQMuUHy1+0B9AAReE4vo8CUAER3ctuFUGQCc0q4Pr7AdAURpyxiK/BUBYsoZaOcMIQMSVyC+1kwZAhV4M4CuuB0BEDVNQk+0FQEoIYdMOxwVAQkc9FAg9CECU/DNApGYHQCo7+REL7QZA","dtype":"float64","shape":[66]},"YTW_true":{"__ndarray__":"YhBYObTIBUDl0CLb+X4GQPhT46WbxMA/BFYOLbKd3z/4U+Olm8QIQB1aZDvfTxNAHVpkO99PE0BzaJHtfL8aQHsUrkfh+hJAGQRWDi2yBUDdJAaBlUMDQBBYObTIdgZAmG4Sg8BKEECDwMqhRbYHQLbz/dR46QxAf2q8dJMYCkDb+X5qvHQEQH9qvHSTGApAg8DKoUW2BECe76fGSzcHQLgehetRuA9A46WbxCCwCECsHFpkO98MQDMzMzMzMwxAUrgehetRB0CPwvUoXI8KQKRwPQrXowVAAiuHFtnOBkB1kxgEVg4FQMl2vp8aLw5AzczMzMzMDECoxks3iUENQDeJQWDl0AVA6SYxCKwcBkCkcD0K16MDQO58PzVeugVASgwCK4eWE0D2KFyPwnUVQE5iEFg5tARA001iEFg5BECYbhKDwMoGQEa28/3UeAZADi2yne+nBkAZBFYOLbIFQKjGSzeJQQVAwcqhRbbzBUDjpZvEILAQQIGVQ4ts5wxAL90kBoGVD0Bg5dAi2/kFQHNoke18PwNAJQaBlUOLBUDD9Shcj8IOQPT91HjpphpADi2yne+nC0Av3SQGgZUGQMl2vp8aLwhAN4lBYOXQBEC4HoXrUbgEQD0K16NwPQdAWmQ730+NB0AMAiuHFtkGQHnpJjEIrAhA5/up8dJNDEAnMQisHFoKQJMYBFYOLQtA","dtype":"float64","shape":[66]},"size_Amount_Outstanding":{"__ndarray__":"neKwt1ClI0Bs3ZCtoJYcQJhrbMKLMyZAQbRKCpEaCEBfVnEHdkQhQNNPABiroi9AcoT4dPGGAUDftqqshGsNQDKAtlGbFR9AU285V89XF0D0tZJ2Og8TQHN7Q5d9NilABq2YkSA3JED1MlhScYEgQLrSNZixSyhAGJ5ibFVZJkAc5fmR/CIWQPUyWFJxgSBA9SZ4AQv0GkAGrZiRIDckQPUmeAEL9BpA0joPMhJPJUD/6F37pFn7P4Q1tQiWGwhAmZJRl4giHkD1MlhScYEgQPUmeAEL9BpA9LWSdjoPE0CHgSt4ChkqQCA5T8Mzhv0/IDlPwzOG/T9xoBb8mhz4P3GgFvyaHPg/9LWSdjoPE0D1JngBC/QaQHE9uCoXmx9A9SZ4AQv0GkBTbzlXz1cXQPS1knY6DxNAMH4JpiRPFUAwfgmmJE8VQPS1knY6DxNA9LWSdjoPE0AwfgmmJE8VQPS1knY6DxNA9LWSdjoPE0BiYmos/ZIyQH7EIyxC+TJAAAAAAAAALkC4lN4uKPQqQHE9uCoXmx9A9SZ4AQv0GkAbgt2FVLMhQDX0RimJKitAcT24KhebH0CHgSt4ChkqQAq60rnJ1SVAc3tDl302KUAEMv/UJQ8jQMY4bKatVydAU285V89XF0CZklGXiCIeQNI6DzISTyVAbN2QraCWHED0tZJ2Og8TQAQy/9QlDyNA","dtype":"float64","shape":[66]}},"selected":{"id":"c4af9766-aabd-472d-b912-14f5785348f3","type":"Selection"},"selection_policy":{"id":"6c00d621-475e-477d-a62d-aa628965a462","type":"UnionRenderers"}},"id":"fdf11ffb-82d7-45bb-a386-f01996dc598e","type":"ColumnDataSource"},{"attributes":{},"id":"9b6ea4f3-dd0b-442c-9b2a-4de7afee3ab8","type":"UnionRenderers"},{"attributes":{},"id":"cd8bb0cc-296e-4b9c-bfd8-db4e9b9c5c10","type":"SaveTool"},{"attributes":{"axis_label":"YTW_true","bounds":"auto","formatter":{"id":"ed7d28a8-27ae-4b57-831a-3b5cdbb5433d","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"d6a9aa67-d303-4f22-b4c7-a79493c4a8f7","subtype":"Figure","type":"Plot"},"ticker":{"id":"89d498e7-5fb2-418d-add5-8892cb7eff5d","type":"BasicTicker"}},"id":"49953d79-fe0f-48a4-89b1-b7398c4c8efa","type":"LinearAxis"},{"attributes":{},"id":"9150199f-e1d8-4efb-9174-3a63fcbdd3d2","type":"ResetTool"},{"attributes":{"dimension":1,"plot":{"id":"009b76b0-7665-4ef8-ad46-8cc0f653be03","subtype":"Figure","type":"Plot"},"ticker":{"id":"fee0873e-41b3-4e9a-bbbd-54abd3ac4e1b","type":"BasicTicker"}},"id":"95b19896-0ba7-4970-b0bb-a542e7c0a800","type":"Grid"},{"attributes":{"callback":null,"end":7.953606324245992,"start":-0.07918323343203326},"id":"eaf17734-16c0-4a49-a21c-4e779bfad9fe","type":"Range1d"},{"attributes":{},"id":"7c943638-e75c-46ea-aad4-ee1984845284","type":"ResetTool"},{"attributes":{},"id":"e78c9a95-bb31-4443-acc4-e975ba4ae79d","type":"LinearScale"},{"attributes":{},"id":"069681ad-f650-4f53-b61d-5490411cb538","type":"Selection"},{"attributes":{},"id":"07f57e90-d991-4915-9db3-ee62caab0e2d","type":"SaveTool"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"2b83b6f2-bb33-4a26-b07a-d95d14089f5f","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"df610929-5faa-4530-8abc-7dddc296d94f","type":"Circle"},{"attributes":{},"id":"76bca8db-e6bf-4e6f-91f1-871335e86590","type":"BasicTicker"},{"attributes":{"callback":null,"formatters":{"Maturity_Date":"datetime"},"renderers":[{"id":"5362f364-a0f4-4e6d-bef5-93302b88445d","type":"GlyphRenderer"}],"tooltips":[["Issuer","@Issuer"],["Currency","@Currency"],["Coupon","@Coupon"],["Maturity","@Maturity_Date{%F}"],["Seniority","@Seniority"],["Rating","@Rating"],["Amt. Outstanding","@Amount_Outstanding m"],["Sector","@{Sector}"],["Country","@Country_of_Incorporation"],["LTM Leverage","@Net_Debt_EBITDA"],["NTM Leverage","@Net_Debt_EBITDA_Fwd_Parent"],["Total Debt/Capital %","@Total_Debt_Capital_Parent"],["Call Price","@Next_Call_Price"],["Call Date","@Next_Call_Date"],["Price","@Price"],["Current Yield","@Current_Yield"],["3m % change","@Price_Change_3m_pct"],["YTW","@YTW_true"],["YTW est.","@YTW_predicted"]]},"id":"0e5e671b-4864-444d-9feb-60b04a329ef6","type":"HoverTool"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"Rating","transform":{"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"Rating","transform":{"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"0d4987f9-8b28-49cc-8e39-f8f7c889338f","type":"Circle"},{"attributes":{"axis_label":"YTW_true","bounds":"auto","formatter":{"id":"9480dffa-954c-45d3-90c0-47c130db7eaa","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"65aa8109-eea1-4641-a269-701a8df9875c","subtype":"Figure","type":"Plot"},"ticker":{"id":"d5867cbf-45b4-4841-9178-1f50de499b4b","type":"BasicTicker"}},"id":"a2876ff0-4b23-4b06-b35d-06984d385dfb","type":"LinearAxis"},{"attributes":{"plot":null,"text":"Materials","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"3dbd7146-a8ca-4a78-a6fd-248f4561fcd2","type":"Title"},{"attributes":{},"id":"ed29ab34-eb18-4285-a10a-1282a128b25f","type":"LinearScale"},{"attributes":{"plot":null,"text":"Consumer Discretionary","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"612ffa36-5996-4a1f-846e-2a3df3ab49fb","type":"Title"},{"attributes":{"axis_label":"YTW_predicted","bounds":"auto","formatter":{"id":"c60c5a1e-c3d4-46b5-8457-7e7be3e9cee8","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"eadecdcf-1e73-4186-b7de-efdf3e743a78","subtype":"Figure","type":"Plot"},"ticker":{"id":"f600cd00-f2fe-4d43-a42b-1e32e95f0946","type":"BasicTicker"}},"id":"aaf80df9-e7cc-4d25-892c-e7308be3843a","type":"LinearAxis"},{"attributes":{"data_source":{"id":"fdf11ffb-82d7-45bb-a386-f01996dc598e","type":"ColumnDataSource"},"glyph":{"id":"af17a0ff-95d2-4db5-a8a7-1f4ea319110e","type":"Circle"},"hover_glyph":null,"muted_glyph":{"id":"326cfc85-6f53-462f-a13e-1137d27bb1ed","type":"Circle"},"nonselection_glyph":{"id":"cfcfe949-a8f9-4f7e-93ac-f0275b02949a","type":"Circle"},"selection_glyph":null,"view":{"id":"7f99fdb4-0786-49a2-bf19-0dace0110ac0","type":"CDSView"}},"id":"9126a374-5dc5-4f3a-8700-1f873ed85ca5","type":"GlyphRenderer"},{"attributes":{},"id":"29f6968f-07d0-47ae-b6b7-8ca6a59a753e","type":"Selection"},{"attributes":{"plot":{"id":"65aa8109-eea1-4641-a269-701a8df9875c","subtype":"Figure","type":"Plot"},"ticker":{"id":"76bca8db-e6bf-4e6f-91f1-871335e86590","type":"BasicTicker"}},"id":"7061f32b-1081-466f-9dd7-8db72d57e93f","type":"Grid"},{"attributes":{"plot":null,"text":"Industrials","text_color":{"value":"black"},"text_font_size":{"value":"12pt"}},"id":"ccbc0061-7299-41f8-8f5d-af0b69c81b17","type":"Title"},{"attributes":{},"id":"fc38b1b4-c544-4b84-b005-593ed6235ae9","type":"LinearScale"},{"attributes":{},"id":"0bf3492e-76c6-4ccb-9f0a-ff80154c63fc","type":"PanTool"},{"attributes":{"axis_label":"YTW_true","bounds":"auto","formatter":{"id":"e3a3f473-5469-4b19-922d-193fbd427cfc","type":"BasicTickFormatter"},"major_label_orientation":"horizontal","plot":{"id":"1c90c8ed-0e65-41d6-a361-ef88f58bf147","subtype":"Figure","type":"Plot"},"ticker":{"id":"c728298a-17af-4a85-a2b8-b045f3fee747","type":"BasicTicker"}},"id":"be036a56-8686-4e5d-b28d-d9b97d464906","type":"LinearAxis"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"e4f1b877-ae3b-400b-89da-649d132b16c5","type":"BoxAnnotation"},{"attributes":{},"id":"14086b6e-31b7-4266-bf75-e1b187b84292","type":"PanTool"},{"attributes":{},"id":"763cc7cf-554d-4c6f-9a31-3043bafec622","type":"BasicTickFormatter"},{"attributes":{"callback":null,"end":7.953606324245992,"start":-0.07918323343203326},"id":"89120961-15e9-429d-ab64-345947f9187b","type":"Range1d"},{"attributes":{"callback":null,"end":6.687,"start":0.131},"id":"de471276-3829-4e8c-b5a6-1233e306b890","type":"Range1d"},{"attributes":{"factors":["A","BBB","A-","A+","-","AA-","BBB-","BBB+"],"palette":["#f99555","#fee695","#fdb466","#f47245","#8b8b8b","#e75236","#fef7b1","#fdd07d"]},"id":"f77adb0c-e6dd-4640-b406-4b2f3418e8dc","type":"CategoricalColorMapper"},{"attributes":{"plot":{"id":"1c90c8ed-0e65-41d6-a361-ef88f58bf147","subtype":"Figure","type":"Plot"},"ticker":{"id":"e0f288a6-e865-4b77-b8d6-8c943ef74a5c","type":"BasicTicker"}},"id":"a98e6406-74b1-4515-9607-a878dab90a9e","type":"Grid"},{"attributes":{},"id":"f600cd00-f2fe-4d43-a42b-1e32e95f0946","type":"BasicTicker"},{"attributes":{},"id":"94a6ecb2-f758-4306-8da3-f8a1ff2a340c","type":"WheelZoomTool"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"38877759-f9d8-494e-8ed1-af30d7d3b49e","type":"Circle"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"d6dcf8be-3c78-42e1-81a9-5aa908854f99","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"d706a4b8-c118-4c12-89be-b9218f1193c3","type":"Circle"},{"attributes":{"callback":null,"end":6.687,"start":0.131},"id":"ccdb6aba-4d27-48cb-929d-67bb11d418af","type":"Range1d"},{"attributes":{"factors":["-"],"palette":["#8b8b8b"]},"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"},{"attributes":{},"id":"bb1a5e53-3ac5-4906-9a8a-5849db7bad1c","type":"PanTool"},{"attributes":{"overlay":{"id":"3c472d61-9270-465c-95be-794a30f1dbad","type":"BoxAnnotation"}},"id":"919c0965-e802-4ca6-aeb1-b6cee21d47b6","type":"BoxZoomTool"},{"attributes":{"callback":null,"data":{"Amount_Outstanding":{"__ndarray__":"exSuR+F6I0A=","dtype":"float64","shape":[1]},"Country_of_Incorporation":["Australia"],"Coupon":{"__ndarray__":"AAAAAAAAGUA=","dtype":"float64","shape":[1]},"Currency":["Australian Dollar"],"Current_Yield":{"__ndarray__":"/jCymcBzF0A=","dtype":"float64","shape":[1]},"Issuer":["Global Switch Property (Australia) Pty Limited"],"Leverage":["-"],"Maturity_Date":{"__ndarray__":"AABAU85od0I=","dtype":"float64","shape":[1]},"Net_Debt_EBITDA":["-"],"Net_Debt_EBITDA_Fwd_Parent":["-"],"Next_Call_Date":["-"],"Next_Call_Price":["-"],"Price":{"__ndarray__":"ZmZmZmamWkA=","dtype":"float64","shape":[1]},"Price_Change_3m_pct":{"__ndarray__":"pHA9Ctej8L8=","dtype":"float64","shape":[1]},"Rating":["BBB"],"Sector":["Real Estate"],"Seniority":["Senior Unsecured"],"Total_Debt_Capital_Parent":["-"],"YTW_predicted":{"__ndarray__":"7knxR6ALEEA=","dtype":"float64","shape":[1]},"YTW_true":{"__ndarray__":"rBxaZDvfDEA=","dtype":"float64","shape":[1]},"size_Amount_Outstanding":{"__ndarray__":"/+hd+6RZ+z8=","dtype":"float64","shape":[1]}},"selected":{"id":"b4888540-3577-4c98-b3a4-c492b041f10f","type":"Selection"},"selection_policy":{"id":"c46ea64d-2146-4e38-8619-8ab2715c3d7d","type":"UnionRenderers"}},"id":"e6e0b173-6daf-4dea-beb5-eb6241b673f8","type":"ColumnDataSource"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"387d2b15-76eb-4fb4-b0dd-8f5f6a867b3e","type":"HoverTool"},{"id":"f30b1122-5a4b-4719-aefe-13cd17561e32","type":"SaveTool"},{"id":"18980020-b7ff-494f-b8a5-73d2518299c5","type":"PanTool"},{"id":"a2fb753f-86d7-4702-8540-c02b033009d8","type":"WheelZoomTool"},{"id":"1e034844-3f24-472b-b1b0-fe152499b2cf","type":"BoxZoomTool"},{"id":"c390c5d8-a256-4242-bb9f-e20937b9cef1","type":"ResetTool"}]},"id":"7b498c75-5e8a-4889-b15c-83f028a3142b","type":"Toolbar"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"2d0bd8bc-9da7-4ce0-98fa-07b052cf81c6","type":"BoxAnnotation"},{"attributes":{},"id":"dc9d9da3-21b1-4e58-9ed2-89baa6c41b1c","type":"Selection"},{"attributes":{},"id":"fee0873e-41b3-4e9a-bbbd-54abd3ac4e1b","type":"BasicTicker"},{"attributes":{"fill_alpha":{"value":0.2},"fill_color":{"field":"Rating","transform":{"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.2},"line_color":{"field":"Rating","transform":{"id":"6ea7b076-eb30-465b-b093-4cc9dd294dc6","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"95d4c2bb-6f08-449a-bc9b-7201c471e53c","type":"Circle"},{"attributes":{},"id":"7c0eea74-4ec5-492f-9f56-82b44f19c262","type":"WheelZoomTool"},{"attributes":{},"id":"c390c5d8-a256-4242-bb9f-e20937b9cef1","type":"ResetTool"},{"attributes":{"active_drag":"auto","active_inspect":"auto","active_scroll":"auto","active_tap":"auto","tools":[{"id":"bda772d7-6690-4ca8-b43b-504f0eb0e784","type":"HoverTool"},{"id":"07f57e90-d991-4915-9db3-ee62caab0e2d","type":"SaveTool"},{"id":"14086b6e-31b7-4266-bf75-e1b187b84292","type":"PanTool"},{"id":"7c0eea74-4ec5-492f-9f56-82b44f19c262","type":"WheelZoomTool"},{"id":"5ef47967-5b29-42e5-b828-6ed861045636","type":"BoxZoomTool"},{"id":"9150199f-e1d8-4efb-9174-3a63fcbdd3d2","type":"ResetTool"}]},"id":"5cfa3fa6-99d5-4633-aa53-39f274cee542","type":"Toolbar"},{"attributes":{"bottom_units":"screen","fill_alpha":{"value":0.5},"fill_color":{"value":"lightgrey"},"left_units":"screen","level":"overlay","line_alpha":{"value":1.0},"line_color":{"value":"black"},"line_dash":[4,4],"line_width":{"value":2},"plot":null,"render_mode":"css","right_units":"screen","top_units":"screen"},"id":"3e12edb8-0df2-4d8e-8f88-e5fb634763e8","type":"BoxAnnotation"},{"attributes":{"data_source":{"id":"7edc7bb8-446f-4fc3-a57a-ed8ad05d08c0","type":"ColumnDataSource"},"glyph":{"id":"72f1da59-4146-4ffb-a400-c1b66103cc46","type":"Circle"},"hover_glyph":null,"muted_glyph":{"id":"466856a1-aee1-4445-8bdd-4d51b757856e","type":"Circle"},"nonselection_glyph":{"id":"b9d9f637-5489-41ad-bbec-de6e132b2d63","type":"Circle"},"selection_glyph":null,"view":{"id":"368b5436-9eaa-438a-aeff-17787500a985","type":"CDSView"}},"id":"a051e887-7176-4dab-afa7-8b7cbfa438ce","type":"GlyphRenderer"},{"attributes":{"overlay":{"id":"e4f1b877-ae3b-400b-89da-649d132b16c5","type":"BoxAnnotation"}},"id":"6c5e4b02-a575-4fd1-8fbc-db84d39bb01c","type":"BoxZoomTool"},{"attributes":{"callback":null,"data":{"Amount_Outstanding":{"__ndarray__":"7FG4HoXrUkDsUbgehetSQGZmZmZmpldAZmZmZmamV0DsUbgehetSQOxRuB6F61JAZmZmZmamV0DsUbgehetSQOxRuB6F61JA","dtype":"float64","shape":[9]},"Country_of_Incorporation":["Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia","Australia"],"Coupon":{"__ndarray__":"AAAAAAAACkAAAAAAAAAGQAAAAAAAAARAAAAAAAAABkAAAAAAAAAFQAAAAAAAAAVAAAAAAAAAB0AAAAAAAAAEQAAAAAAAAAVA","dtype":"float64","shape":[9]},"Currency":["Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar","Australian Dollar"],"Current_Yield":{"__ndarray__":"iECTosbiCUCEOSZVx/YFQIYb70rRAgRABiTLXlwPBkA1crGxqhsFQJkBxSEwHQVAp4fcUkTvBkCNMuHOeAwEQHsIt5ldDQVA","dtype":"float64","shape":[9]},"Issuer":["Daimler Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd","Mercedes-Benz Australia/Pacific Pty Ltd"],"Leverage":["5-6x","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x","5-6x"],"Maturity_Date":{"__ndarray__":"AACARJRydkIAAEDMH652QgAAAP4xyHZCAADA6jKDd0IAAIDMeF93QgAAwKgscXdCAACAdckLd0IAAEDAxeZ2QgAAAJfnLXdC","dtype":"float64","shape":[9]},"Net_Debt_EBITDA":["5.96x","5.96x","5.96x","5.96x","5.96x","5.96x","5.96x","5.96x","5.96x"],"Net_Debt_EBITDA_Fwd_Parent":["5.30x","5.30x","5.30x","5.30x","5.30x","5.30x","5.30x","5.30x","5.30x"],"Next_Call_Date":["-","-","-","-","-","-","-","-","-"],"Next_Call_Price":["-","-","-","-","-","-","-","-","-"],"Price":{"__ndarray__":"TmIQWDkcWUDRItv5fgpZQBSuR+F6/FhAO99PjZfuWECsHFpkO99YQD0K16Nw3VhACtejcD0SWUCcxCCwcvBYQOOlm8Qg8FhA","dtype":"float64","shape":[9]},"Price_Change_3m_pct":{"__ndarray__":"f2q8dJMY1L+PwvUoXI/Cv6AaL90kBsG/AAAAAAAA+H/6fmq8dJN4v7gehetRuJ4/eekmMQisvL9KDAIrhxapv7Kd76fGS7c/","dtype":"float64","shape":[9]},"Rating":["A","A","A","A","A","A","A","A","A"],"Sector":["Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary","Consumer Discretionary"],"Seniority":["Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured","Senior Unsecured"],"Total_Debt_Capital_Parent":["65.9%","65.9%","65.9%","65.9%","65.9%","65.9%","65.9%","65.9%","65.9%"],"YTW_predicted":{"__ndarray__":"eLLcVy/LBUBWmjR2HhIFQEq2qaw5sgRAIglGJnApBkDp6EtnkMMFQM5OL34RzwVAkP0cuNvSBUDibmkBg9gEQNnxeFMndAVA","dtype":"float64","shape":[9]},"YTW_true":{"__ndarray__":"3SQGgZVDA0BOYhBYObQEQNNNYhBYOQRAmG4Sg8DKBkBGtvP91HgGQA4tsp3vpwZAGQRWDi2yBUCoxks3iUEFQMHKoUW28wVA","dtype":"float64","shape":[9]},"size_Amount_Outstanding":{"__ndarray__":"9LWSdjoPE0D0tZJ2Og8TQDB+CaYkTxVAMH4JpiRPFUD0tZJ2Og8TQPS1knY6DxNAMH4JpiRPFUD0tZJ2Og8TQPS1knY6DxNA","dtype":"float64","shape":[9]}},"selected":{"id":"d5908812-efc5-44bc-b1bc-2782cb5e0568","type":"Selection"},"selection_policy":{"id":"31de31ca-f1ae-4e88-88b7-06afcc01f722","type":"UnionRenderers"}},"id":"4951c8d7-cc79-4657-b6b7-f1dfd2f4ae0b","type":"ColumnDataSource"},{"attributes":{"fill_alpha":{"value":0.7},"fill_color":{"field":"Rating","transform":{"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"}},"line_alpha":{"value":0.7},"line_color":{"field":"Rating","transform":{"id":"96d26e99-0611-441a-bae3-96d726b523f1","type":"CategoricalColorMapper"}},"size":{"field":"size_Amount_Outstanding","units":"screen"},"x":{"field":"YTW_predicted"},"y":{"field":"YTW_true"}},"id":"b9d9f637-5489-41ad-bbec-de6e132b2d63","type":"Circle"}],"root_ids":["8ef45f29-26be-45ca-96b5-45850552044a"]},"title":"Bokeh Application","version":"0.12.16"}};
+  var render_items = [{"docid":"b860d26d-2f9f-4ae4-999e-202780c46496","elementid":"da17b8f2-35a8-4ef9-8fd1-eb1aa6c55c4d","modelid":"8ef45f29-26be-45ca-96b5-45850552044a"}];
+  root.Bokeh.embed.embed_items_notebook(docs_json, render_items);
+
+  }
+  if (root.Bokeh !== undefined) {
+    embed_document(root);
+  } else {
+    var attempts = 0;
+    var timer = setInterval(function(root) {
+      if (root.Bokeh !== undefined) {
+        embed_document(root);
+        clearInterval(timer);
+      }
+      attempts++;
+      if (attempts > 100) {
+        console.log("Bokeh: ERROR: Unable to run BokehJS code because BokehJS library is missing")
+        clearInterval(timer);
+      }
+    }, 10, root)
+  }
+})(window);
+</script>
+</div>
