@@ -1,5 +1,5 @@
 ---
-title: all_countries
+title: All Countries
 layout: page
 chart: output
 ---
@@ -7,7 +7,7 @@ chart: output
 [Back to screen list](../bond_screen.html)
 
 {% raw %}
-<iframe src="/charts/renders/All Countries.html"
+<iframe src="/charts/renders/all_countries.html"
     style="max-width = 100%; max-height = 100%"
     sandbox="allow-same-origin allow-scripts"
     width="1200"
