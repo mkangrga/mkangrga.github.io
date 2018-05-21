@@ -259,7 +259,8 @@
 
   h2 {
     @include relative-font-size(2);
-    margin-left: 3em;
+    -webkit-margin-start: 50px;
+    -webkit-margin-end: 50px;
 
     @include media-query($on-laptop) {
       @include relative-font-size(1.75);
@@ -268,7 +269,8 @@
 
   h3 {
     @include relative-font-size(1.625);
-    margin-left: 3em;
+    -webkit-margin-start: 50px;
+    -webkit-margin-end: 50px;
 
     @include media-query($on-laptop) {
       @include relative-font-size(1.375);
@@ -277,7 +279,8 @@
 
   h4 {
     @include relative-font-size(1.25);
-    margin-left: 3em;
+    -webkit-margin-start: 50px;
+    -webkit-margin-end: 50px;
 
     @include media-query($on-laptop) {
       @include relative-font-size(1.125);
